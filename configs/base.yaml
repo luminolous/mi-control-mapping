@@ -1,0 +1,20 @@
+# Values shared by every experiment. Keys under `paths`, `device`, `n_workers`,
+# `logging`, and `progress_every` are excluded from the config hash because they
+# cannot change any number a run produces. See src/micm/utils/hashing.py.
+
+seed: 1337
+
+paths:
+  data_raw: data/raw
+  data_processed: data/processed
+  artifacts: artifacts
+
+# Falls back to cpu with a loud warning, never silently.
+device: cuda
+n_workers: 8
+
+logging:
+  level: INFO
+
+# How many episodes between runner progress lines.
+progress_every: 100

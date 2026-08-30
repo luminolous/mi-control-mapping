@@ -216,3 +216,24 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Agents
+.agents
+CLAUDE.md
+
+# Project working documents kept out of version control by request
+docs/decisions.md
+
+# Datasets and run outputs. Both are reproducible from configs and are large.
+data/
+artifacts/
+
+# Cached posteriors and any other npz artifact. Golden fixtures are the
+# exception: the whole point of a golden file is that it is versioned.
+*.npz
+!tests/fixtures/*.npz
+
+# Hydra run directories
+.hydra/
+outputs/
+multirun/
