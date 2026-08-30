@@ -62,7 +62,15 @@ src = ["src", "tests", "scripts"]
 select = ["E", "F", "I", "UP", "B", "SIM", "RUF", "N", "ARG", "PTH"]
 ignore = [
     "E501",  # line length is enforced by the formatter, not the linter
+    # `X` for a feature matrix and `y` for labels is the convention in the specs
+    # and in scikit-learn. Renaming it to `x` would make the code harder to read
+    # against both.
+    "N803",
+    "N806",
 ]
+
+[tool.ruff.lint.isort]
+known-first-party = ["micm"]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/*" = ["ARG"]  # pytest fixtures are injected but not always referenced
