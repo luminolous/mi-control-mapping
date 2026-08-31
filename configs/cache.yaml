@@ -1,0 +1,19 @@
+# Composition root for scripts/02_cache_posteriors.py.
+
+defaults:
+  - base
+  - data: bci2a
+  - decoder: riemann
+  - replay: burst
+  - _self_
+
+name: cache
+
+# Which sessions to decode and cache.
+#
+# E only by default. The closed-loop runner draws its trials from session E
+# (docs/decisions.md D1), and a session T cache would be in-sample: the decoder
+# was fitted on those very windows, so its posteriors are optimistic in a way
+# nothing downstream could detect. Adding T is allowed for diagnostics and is
+# flagged both in the log and in the file's own metadata.
+sessions: [E]

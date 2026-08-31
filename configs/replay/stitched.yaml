@@ -1,0 +1,11 @@
+# Stitched protocol: trials concatenated with no gaps, windows may cross trial
+# boundaries. Ablation only. A boundary-spanning window takes the label of the
+# trial holding its last sample and is flagged so it can be excluded.
+
+name: stitched
+protocol: stitched
+
+window_s: 2.0
+stride_s: 0.25
+first_window: delay
+gap_s: 0.0

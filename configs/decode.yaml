@@ -9,6 +9,7 @@ defaults:
   - base
   - data: bci2a
   - decoder: riemann
+  - replay: burst
   - _self_
 
 name: decode

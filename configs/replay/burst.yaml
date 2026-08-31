@@ -1,0 +1,19 @@
+# Burst protocol: one command period per trial, robot stationary between them.
+# The main condition, and the faithful one for cue-based data.
+
+name: burst
+protocol: burst
+
+# A 2 s window advancing by 250 ms gives the 4 Hz update rate common in online
+# MI-BCI. At 250 Hz the stride is 62.5 samples, so window starts alternate 62
+# and 63 samples; t_rel is computed from the sample actually used, not from the
+# nominal stride, so it does not drift.
+window_s: 2.0
+stride_s: 0.25
+
+# Only `delay` is implemented. Padding the first window from the pre-cue
+# baseline needs samples epoching does not keep; widen data.epoch.tmin instead.
+first_window: delay
+
+# Simulated rest between bursts, during which no command is available.
+gap_s: 2.0
