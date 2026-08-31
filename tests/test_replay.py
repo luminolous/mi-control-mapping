@@ -30,11 +30,14 @@ from micm.replay.cache import (
 )
 from micm.replay.latency import LatencyBuffer, available_mask
 from micm.replay.perturb import (
+    QUALITY_ABSOLUTE,
+    QUALITY_MODES,
     burst_error,
     effective_accuracy,
     label_smoothing,
     lambda_for_accuracy,
     oracle_mixing,
+    resolve_quality_levels,
     temporal_jitter,
 )
 from micm.replay.stream import (
@@ -593,3 +596,71 @@ def test_validation_rejects_a_nan_posterior() -> None:
     arrays["posterior"][0, 0] = np.nan
     with pytest.raises(ValueError, match="NaN or inf"):
         validate_arrays(**arrays)
+
+
+# --- quality levels ---
+
+
+def test_gap_fraction_levels_are_distinct_and_span_baseline_to_oracle() -> None:
+    """A fixed lambda grid puts three of six points on the same perfect decoder."""
+    p, y, _ = synthetic_posteriors(n_bursts=40)
+    levels = resolve_quality_levels(p, y, [0.0, 0.2, 0.4, 0.6, 0.8, 1.0])
+
+    achieved = [level.achieved_accuracy for level in levels]
+    assert achieved[0] == pytest.approx(effective_accuracy(p, y))
+    assert achieved[-1] == 1.0
+    assert len(set(np.round(achieved, 6))) == len(levels)
+    assert all(b >= a for a, b in itertools.pairwise(achieved))
+
+
+def test_gap_fraction_targets_close_the_stated_share_of_the_gap() -> None:
+    p, y, _ = synthetic_posteriors(n_bursts=40)
+    baseline = effective_accuracy(p, y)
+    for level in resolve_quality_levels(p, y, [0.0, 0.5, 1.0]):
+        expected = baseline + level.level * (1.0 - baseline)
+        assert level.target_accuracy == pytest.approx(expected)
+
+
+def test_resolved_levels_report_what_they_achieved_not_what_they_asked_for() -> None:
+    """Accuracy is a step function of lambda, so achieved can exceed the target."""
+    p, y, _ = synthetic_posteriors(n_bursts=40)
+    for level in resolve_quality_levels(p, y, [0.0, 0.3, 0.7, 1.0]):
+        assert level.achieved_accuracy >= level.target_accuracy - 1e-9
+        assert level.achieved_accuracy == pytest.approx(
+            oracle_mixing(p, y, level.lam).effective_accuracy
+        )
+
+
+def test_absolute_mode_collapses_below_a_strong_baseline() -> None:
+    """The behaviour that motivated the gap-fraction default, pinned so it is visible."""
+    p, y, _ = synthetic_posteriors(n_bursts=40)
+    baseline = effective_accuracy(p, y)
+    levels = resolve_quality_levels(
+        p, y, [baseline - 0.2, baseline - 0.1, 1.0], mode=QUALITY_ABSOLUTE
+    )
+    assert levels[0].lam == 0.0
+    assert levels[1].lam == 0.0
+    assert levels[0].achieved_accuracy == levels[1].achieved_accuracy
+
+
+def test_lambda_saturates_well_before_one() -> None:
+    """Why a fixed lambda grid wastes half its episodes on the oracle ceiling."""
+    p, y, _ = synthetic_posteriors(n_bursts=40)
+    saturation = lambda_for_accuracy(p, y, 1.0)
+    assert saturation < 1.0
+    assert oracle_mixing(p, y, saturation).effective_accuracy == 1.0
+
+
+def test_quality_levels_reject_a_bad_mode_or_level() -> None:
+    p, y, _ = synthetic_posteriors()
+    with pytest.raises(ValueError, match="unknown quality mode"):
+        resolve_quality_levels(p, y, [0.0, 1.0], mode="linear")
+    with pytest.raises(ValueError, match=r"levels must lie in \[0, 1\]"):
+        resolve_quality_levels(p, y, [0.0, 1.5])
+
+
+@pytest.mark.parametrize("name", ["gap_fraction", "absolute"])
+def test_quality_configs_declare_a_mode_and_six_levels(name: str) -> None:
+    cfg = load_config("cache", overrides=(f"+quality={name}",))
+    assert str(cfg.quality.mode) in QUALITY_MODES
+    assert len(cfg.quality.levels) == 6

@@ -1,0 +1,13 @@
+# Decoder-quality sweep, specified by how far each level closes the gap between
+# the decoder's own accuracy and perfect.
+#
+#     target = baseline + level * (1 - baseline)
+#
+# Level 0 is the untouched decoder, level 1 is the oracle. The mixing weight is
+# solved per cell, because a fixed lambda buys a different amount of accuracy
+# depending on how peaked that decoder's posteriors are, and saturates well
+# before lambda = 1. See docs/decisions.md D27a.
+
+name: gap_fraction
+mode: gap_fraction
+levels: [0.0, 0.2, 0.4, 0.6, 0.8, 1.0]

@@ -12,6 +12,7 @@ assumed rather than measured is not a matched-accuracy condition.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Final
 
@@ -276,3 +277,83 @@ def burst_error(
             position = stop
 
     return _finish(out, y)
+
+
+QUALITY_GAP_FRACTION: Final[str] = "gap_fraction"
+QUALITY_ABSOLUTE: Final[str] = "absolute"
+QUALITY_MODES: Final[tuple[str, str]] = (QUALITY_GAP_FRACTION, QUALITY_ABSOLUTE)
+
+
+@dataclass(frozen=True)
+class QualityLevel:
+    """One rung of the decoder-quality sweep, resolved for one cell.
+
+    Attributes:
+        level: the requested level as written in the config.
+        target_accuracy: the effective accuracy that level asks for.
+        lam: the oracle-mixing weight that reaches it.
+        achieved_accuracy: what that `lam` actually gives. Effective accuracy is
+            a step function of `lam`, one step per window, so this is at least
+            the target and may exceed it. Report this, never the target.
+    """
+
+    level: float
+    target_accuracy: float
+    lam: float
+    achieved_accuracy: float
+
+
+def resolve_quality_levels(
+    p: np.ndarray,
+    labels: np.ndarray,
+    levels: Sequence[float],
+    *,
+    mode: str = QUALITY_GAP_FRACTION,
+) -> list[QualityLevel]:
+    """Turn a sweep specification into the mixing weights for one cell.
+
+    A fixed grid of `lam` values does not place comparable conditions. How much
+    accuracy a given `lam` buys depends on how peaked the decoder's posteriors
+    are, which differs by subject and by decoder, and oracle mixing saturates
+    well before `lam = 1`. On subject 1 with the Riemannian decoder it saturates
+    at 0.498, so half of the grid in `agents/05` §1 is the same perfect decoder.
+    See docs/decisions.md D27a.
+
+    Two modes:
+
+    - `gap_fraction` (default): `target = baseline + level * (1 - baseline)`, so
+      level 0 is the untouched decoder and level 1 is the oracle. Every cell
+      spends its episodes on distinct conditions regardless of how good its
+      decoder is.
+    - `absolute`: `target = level`. Conditions sit at the same accuracy for
+      every cell, at the cost of collapsing to `lam = 0` for any cell whose
+      decoder is already better than the target.
+
+    Note that oracle mixing only ever raises accuracy. Neither mode can place a
+    cell below its own baseline; degrading a strong decoder needs
+    `burst_error` or `label_smoothing`, not this.
+
+    Raises:
+        ValueError: on an unknown mode, or a level outside [0, 1].
+    """
+    if mode not in QUALITY_MODES:
+        raise ValueError(f"unknown quality mode {mode!r}, expected one of {list(QUALITY_MODES)}")
+    if any(not 0.0 <= level <= 1.0 for level in levels):
+        raise ValueError(f"levels must lie in [0, 1], got {list(levels)}")
+
+    baseline = effective_accuracy(p, labels)
+    resolved: list[QualityLevel] = []
+    for level in levels:
+        target = (
+            baseline + level * (1.0 - baseline) if mode == QUALITY_GAP_FRACTION else float(level)
+        )
+        lam = lambda_for_accuracy(p, labels, target)
+        resolved.append(
+            QualityLevel(
+                level=float(level),
+                target_accuracy=float(target),
+                lam=lam,
+                achieved_accuracy=oracle_mixing(p, labels, lam).effective_accuracy,
+            )
+        )
+    return resolved

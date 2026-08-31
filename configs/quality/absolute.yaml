@@ -1,0 +1,10 @@
+# Decoder-quality sweep at fixed effective-accuracy targets, the same for every
+# cell. Comparable across cells, but any cell whose decoder is already better
+# than a target collapses to lambda = 0 and duplicates its baseline condition.
+#
+# Oracle mixing only raises accuracy, so targets below a cell's baseline are
+# unreachable. Kept as an ablation.
+
+name: absolute
+mode: absolute
+levels: [0.75, 0.80, 0.85, 0.90, 0.95, 1.00]
