@@ -1,0 +1,12 @@
+# Composition root for scripts/00_download_data.py.
+#
+# Exists because a Hydra config group member cannot carry its own defaults list;
+# the script needs `paths` from base and the dataset description from the data
+# group in one composed config.
+
+defaults:
+  - base
+  - data: bci2a
+  - _self_
+
+name: download
