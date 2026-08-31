@@ -4,20 +4,20 @@
     python scripts/01_fit_decoders.py decoder=fbcsp
     python scripts/01_fit_decoders.py --subject 1 --save
 
-Reports Cohen's kappa per subject against the published range declared in the
-decoder config. A kappa far below that range means preprocessing is wrong.
-Tuning the classifier to compensate would hide the cause, so don't.
+Reports Cohen's kappa per subject against the range declared in the decoder
+config, which says whether it is the published one or this implementation's own.
+A kappa far below it means preprocessing is wrong. Tuning the classifier to
+compensate would hide the cause, so don't.
 
-Epoch-anchoring check (docs/decisions.md D13a). The dataset's annotations are
-assumed to sit at trial start, with the cue 2 s later. Setting the offset to
-zero epochs the fixation period, where there is no imagery, so it must collapse
-to chance:
+Epoch-anchoring check (docs/decisions.md D13b). The annotations sit on the cue,
+measured with an offset sweep rather than inferred from `dataset.interval`.
+Shifting the window off the imagery period must cost kappa:
 
     python scripts/01_fit_decoders.py --subject 1
-    python scripts/01_fit_decoders.py --subject 1 data.epoch.event_offset_s=0.0
+    python scripts/01_fit_decoders.py --subject 1 data.epoch.event_offset_s=2.0
 
-If both runs give a similar kappa, the anchoring assumption is wrong and
-everything built on it is suspect.
+On subject 1 that shift costs about 0.25 kappa. If the two runs score alike, the
+anchoring is wrong and everything built on it is suspect.
 """
 
 from __future__ import annotations
@@ -63,6 +63,7 @@ def main(argv: list[str] | None = None) -> int:
     subjects = list(args.subjects if args.subjects else cfg.data.subjects)
     decoder_name = str(cfg.decoder.name)
     low, high = (float(v) for v in cfg.decoder.expected_kappa)
+    published = bool(cfg.decoder.kappa_is_published)
 
     set_download_dir(Path(cfg.paths.data_raw))
     dataset = build_dataset(cfg)
@@ -107,17 +108,22 @@ def main(argv: list[str] | None = None) -> int:
     # Between-subject spread on IV-2a is larger than most effects of interest,
     # so a single subject outside the range says nothing on its own.
     verdict = "within" if low <= kappas.mean() <= high else "OUTSIDE"
+    origin = (
+        "published cross-subject range"
+        if published
+        else "range reproduced by this implementation, NOT the published one"
+    )
     print(
         f"\nmean kappa {kappas.mean():.3f} (sd {kappas.std(ddof=1) if len(kappas) > 1 else 0.0:.3f}) "
         f"over {len(kappas)} subject(s)"
     )
-    print(f"published cross-subject range {low:.2f} to {high:.2f}: {verdict}")
+    print(f"{origin} {low:.2f} to {high:.2f}: {verdict}")
     if len(kappas) < 9:
         print("note: fewer than 9 subjects, the comparison to the range is not meaningful yet")
 
     if len(kappas) == 9 and kappas.mean() < low:
         logger.warning(
-            "mean kappa is below the published range. The cause is upstream of the "
+            "mean kappa is below the expected range. The cause is upstream of the "
             "classifier: check the epoch anchoring, the filter band, and the split"
         )
     return 0

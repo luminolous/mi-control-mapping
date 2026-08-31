@@ -8,6 +8,7 @@ name: fbcsp
 
 # Published range on BCI IV-2a. A result far outside it means preprocessing is
 # wrong; the fix is upstream, not in the classifier.
+kappa_is_published: true
 expected_kappa: [0.40, 0.55]
 
 params:

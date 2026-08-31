@@ -2,6 +2,7 @@
 
 name: riemann
 
+kappa_is_published: true
 expected_kappa: [0.55, 0.70]
 
 params:

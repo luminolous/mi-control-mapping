@@ -308,11 +308,23 @@ def test_registry_config_seed_follows_the_global_seed() -> None:
 
 
 @pytest.mark.parametrize("name", ["fbcsp", "riemann", "eegnet"])
-def test_every_decoder_config_declares_its_published_kappa_range(name: str) -> None:
-    """The range is what tells the user a bad result is upstream of the classifier."""
+def test_every_decoder_config_declares_a_kappa_range_and_its_origin(name: str) -> None:
+    """The range tells the user a bad result is upstream of the classifier.
+
+    `kappa_is_published` says whether the range is the literature's or this
+    implementation's own. Without it, EEGNet scoring "within" its range would
+    read as reproducing a published figure, which it does not.
+    """
     cfg = load_config("decode", overrides=(f"decoder={name}",))
     low, high = (float(v) for v in cfg.decoder.expected_kappa)
     assert 0.0 < low < high < 1.0
+    assert isinstance(cfg.decoder.kappa_is_published, bool)
+
+
+def test_eegnet_range_is_marked_as_not_published() -> None:
+    """EEGNet trains trial-wise; the published figures come from cropped training."""
+    cfg = load_config("decode", overrides=("decoder=eegnet",))
+    assert cfg.decoder.kappa_is_published is False
 
 
 def test_registry_rejects_an_unknown_name() -> None:
