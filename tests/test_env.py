@@ -33,10 +33,15 @@ from micm.env.task import (
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
-# The burst protocol as the replay config defines it: a 3.5 s command period
-# followed by a 2 s rest during which no command is available.
+# The burst protocol as the replay and data configs define it: a 3.5 s trial
+# followed by a 2 s rest. A command does not exist for the whole burst. The
+# first decoding window needs `WINDOW_S` of data and the latency buffer holds
+# the result for `LATENCY_S`, so the robot is only driven for the remainder.
 BURST_S = 3.5
 GAP_S = 2.0
+WINDOW_S = 2.0
+LATENCY_S = 0.25
+COMMAND_S = BURST_S - WINDOW_S - LATENCY_S
 
 
 @pytest.fixture
@@ -74,7 +79,8 @@ def run_oracle_episode(task: CenterOutTask, *, max_seconds: float = 800.0) -> in
     the hard part of the task, not the decoding.
     """
     task.reset()
-    burst_steps = round(BURST_S / task.dt)
+    silent_steps = round((WINDOW_S + LATENCY_S) / task.dt)
+    command_steps = round(COMMAND_S / task.dt)
     gap_steps = round(GAP_S / task.dt)
     limit = round(max_seconds / task.dt)
 
@@ -84,16 +90,18 @@ def run_oracle_episode(task: CenterOutTask, *, max_seconds: float = 800.0) -> in
         direction = task.directions[task.intended_class()]
         command = direction * task.v_max
 
-        for _ in range(burst_steps):
-            if task.done:
-                break
-            acquired += int(task.step(command).acquired)
-            steps += 1
-
-        for _ in range(gap_steps):
+        # No estimate exists yet: the first window is still filling, then the
+        # latency buffer is holding it.
+        for _ in range(silent_steps + gap_steps):
             if task.done:
                 break
             acquired += int(task.step(None).acquired)
+            steps += 1
+
+        for _ in range(command_steps):
+            if task.done:
+                break
+            acquired += int(task.step(command).acquired)
             steps += 1
     return acquired
 
@@ -410,22 +418,25 @@ def test_timeout_covers_the_worst_case_reach(cfg: DictConfig) -> None:
     targets can be two radii apart because attempts are not reset, and the
     staircase around a diagonal adds about sqrt(2) to the path.
     """
-    duty = BURST_S / (BURST_S + GAP_S)
+    duty = COMMAND_S / (BURST_S + GAP_S)
     effective_speed = float(cfg.v_max) * duty
     worst_case = 2.0 * np.sqrt(2.0) * float(cfg.radius) / effective_speed
 
     assert float(cfg.timeout_s) >= worst_case + float(cfg.dwell_s)
 
 
-def test_per_burst_travel_is_small_enough_to_settle_inside_a_target(cfg: DictConfig) -> None:
-    """The staircase limit cycle is about one burst wide, so it must fit in the target.
+def test_per_burst_travel_stays_in_the_measured_window(cfg: DictConfig) -> None:
+    """A coarse guard. The oracle ceiling tests are the authority.
 
     With four directions and eight targets, a diagonal target is approached by
-    alternating cardinals and the robot ends up oscillating around it. If one
-    burst carries it further than the target is wide, it never dwells inside and
-    no decoder, however good, can acquire a diagonal target.
+    alternating cardinals and the robot oscillates around it. Both extremes fail:
+    too large a step and it never dwells inside, too small and the staircase
+    straddles the target rather than settling in it. At exactly one target radius
+    per burst the oracle stalls on a diagonal even at a 200 s timeout; 1.25 radii
+    clears all eight. The workable band is narrow and was found by measurement.
     """
-    assert float(cfg.v_max) * BURST_S <= 1.25 * float(cfg.target_radius)
+    radii_per_burst = float(cfg.v_max) * COMMAND_S / float(cfg.target_radius)
+    assert 1.1 <= radii_per_burst <= 1.6
 
 
 def test_uniform_random_commands_stay_near_the_chance_floor(cfg: DictConfig) -> None:
@@ -440,19 +451,20 @@ def test_uniform_random_commands_stay_near_the_chance_floor(cfg: DictConfig) -> 
         task = build_task(cfg, seed=seed)
         task.reset()
         rng = np.random.default_rng(1000 + seed)
-        burst_steps, gap_steps = round(BURST_S / task.dt), round(GAP_S / task.dt)
+        silent = round((WINDOW_S + LATENCY_S + GAP_S) / task.dt)
+        command_steps = round(COMMAND_S / task.dt)
 
         acquired = 0
         while not task.done:
             command = task.directions[rng.integers(0, N_CLASSES)] * task.v_max
-            for _ in range(burst_steps):
-                if task.done:
-                    break
-                acquired += int(task.step(command).acquired)
-            for _ in range(gap_steps):
+            for _ in range(silent):
                 if task.done:
                     break
                 acquired += int(task.step(None).acquired)
+            for _ in range(command_steps):
+                if task.done:
+                    break
+                acquired += int(task.step(command).acquired)
         rates.append(acquired / task.n_targets)
 
     assert float(np.mean(rates)) < 0.3

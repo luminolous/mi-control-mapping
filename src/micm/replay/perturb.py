@@ -73,13 +73,20 @@ def _validate_labels(labels: np.ndarray, n_windows: int, n_classes: int) -> np.n
 
 
 def _finish(p: np.ndarray, labels: np.ndarray) -> PerturbResult:
-    """Assert the row sums survived, then measure what the perturbation achieved."""
+    """Assert the row sums survived, then measure what the perturbation achieved.
+
+    Accuracy is measured on the float32 array that is handed out, not on the
+    float64 intermediate. Oracle mixing can land two classes on exactly equal
+    probability, and rounding to float32 breaks that tie differently, so
+    measuring the intermediate would report an accuracy the caller never sees.
+    """
     if not np.allclose(p.sum(axis=1), 1.0, atol=ROW_SUM_TOL):
         worst = float(np.max(np.abs(p.sum(axis=1) - 1.0)))
         raise AssertionError(f"perturbation broke the row sums, worst deviation {worst:.3e}")
+    narrowed = p.astype(np.float32)
     return PerturbResult(
-        posterior=p.astype(np.float32),
-        effective_accuracy=effective_accuracy(p, labels),
+        posterior=narrowed,
+        effective_accuracy=effective_accuracy(narrowed, labels),
     )
 
 

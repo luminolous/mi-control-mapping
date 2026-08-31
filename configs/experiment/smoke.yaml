@@ -1,0 +1,77 @@
+# @package _global_
+#
+# Placed at the global package: a config under configs/experiment/ would
+# otherwise be nested under an `experiment` key by Hydra's directory-based
+# package inference, and every path in the runner would need that prefix.
+# Smoke run: synthetic posteriors, one subject, one mapping, two episodes.
+#
+# Exists so that "I could not run it" is never a reason for delivering
+# unexecuted code. It exercises the whole path from posterior to
+# episodes.parquet and summary.json, including the writer. It is not evidence
+# that any result is correct.
+#
+# Must finish in under five seconds, which is why the target count, the burst
+# budget, and the sanity episode counts are all cut down here.
+
+defaults:
+  - /base
+  - /data: bci2a
+  - /replay: burst
+  - /quality: gap_fraction
+  - /env: centerout
+  - /mapping: s1_argmax
+  - _self_
+
+name: smoke
+
+# No dataset, no cache files. Posteriors are generated in process.
+synthetic:
+  enabled: true
+  n_bursts: 24
+  n_windows: 7
+  accuracy: 0.75
+  confidence: 0.7
+
+# Read only when `synthetic.enabled` is false. Null rather than `???`, because
+# a mandatory-missing value breaks config hashing, and the hash has to work for
+# a synthetic run too.
+session: E
+posterior_hash: null
+
+grid:
+  subjects: [1]
+  decoders: [synthetic]
+  mappings: [s1_argmax]
+  quality_levels: [0.0, 1.0]
+  protocols: [burst]
+  error_structures: [none]
+  intent_modes: [aware]
+  # Null rather than NaN: a NaN in the config would break the config hash,
+  # which serialises to JSON with allow_nan disabled on purpose. The episode
+  # column is still NaN, which is what the output contract asks for.
+  alphas: [null]
+  latencies_ms: [250]
+  seeds: 1
+
+# Parameters of the structured-error variants, read when error_structures
+# names one of them.
+error_structure:
+  smoothing_eps: 0.3
+  jitter_windows: 2
+  burst_p_flip: 0.2
+  burst_mean_len: 3.0
+
+# A hard cap on how many bursts one episode may consume, so a mapping that never
+# acquires anything still terminates.
+max_bursts_per_episode: 40
+
+sanity:
+  n_episodes: 2
+  oracle_threshold: 0.95
+  chance_threshold: 0.3
+
+# Two targets rather than eight, and a short timeout, to stay inside the five
+# second budget. Everything else is the real environment.
+env:
+  n_targets: 2
+  timeout_s: 60.0

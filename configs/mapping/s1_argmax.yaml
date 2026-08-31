@@ -1,0 +1,9 @@
+# S1: argmax over the posterior, full speed along that class's direction.
+#
+# The literature default and this study's lower bound. No parameters beyond the
+# speed limit, and no state.
+
+name: s1_argmax
+
+params:
+  v_max: ${env.v_max}

@@ -19,18 +19,20 @@ target_radius: 0.15
 # stay inside continuously.
 dwell_s: 0.5
 
-# Set from the geometry, not by taste. The robot is idle during the 2 s gap, so
-# its effective speed is v_max * 3.5 / 5.5 = 0.0318 per second. Targets are not
-# reset between attempts, so consecutive targets can be 2 * radius apart, and
+# Set from the geometry, not by taste. The robot is idle during the 2 s gap and
+# during the first 2.25 s of each burst, before any estimate exists. Targets are
+# not reset between attempts, so consecutive targets can be 2 * radius apart, and
 # the staircase around a diagonal adds a factor of about sqrt(2) to the path.
-# The worst case is therefore 2 * 1.41 * radius / 0.0318, about 89 s, plus the
-# dwell and the detour around an obstacle.
+# Effective speed is v_max * 1.25 / 5.5 = 0.0273 per second, counting only the
+# 1.25 s of each 5.5 s cycle during which a command exists at all. The worst
+# case is 2 * 1.41 * radius / 0.0273, about 104 s, plus the dwell and the detour
+# around an obstacle.
 #
 # At 60 s the oracle acquired only 5 of 8, failing on the two longest reaches
 # while still travelling toward them. A timeout that the oracle cannot meet
 # makes every success rate a measurement of the timeout.
 # `test_timeout_covers_the_worst_case_reach` pins the arithmetic.
-timeout_s: 120.0
+timeout_s: 150.0
 
 # Continue from where the previous target was acquired rather than teleporting
 # back to the centre, which would make every attempt identical and discard the
@@ -40,10 +42,18 @@ reset_between_targets: false
 # 100 Hz, zero-order hold between the 4 Hz decoder updates.
 dt: 0.01
 
-# 0.05 * 3.5 s = 0.175 per burst, just above target_radius. Slower makes every
-# episode longer for no change in conclusion; faster and the staircase around a
-# diagonal target never settles inside the target.
-v_max: 0.05
+# A burst does NOT carry a command for its whole 3.5 s. The first window needs
+# 2 s of data before any estimate exists, and the latency buffer holds it for a
+# further 250 ms, so a command is available for 3.5 - 2.0 - 0.25 = 1.25 s.
+#
+# 0.15 * 1.25 = 0.1875 per burst, or 1.25 target radii. The usable window is
+# narrow and was found by measurement, not derived: at exactly one target radius
+# per burst the oracle stalls on a diagonal target and fails it even with the
+# timeout raised to 200 s, because the staircase straddles the target instead of
+# settling in it. `test_the_oracle_ceiling_holds_across_seeds` is the authority
+# here; the analytic bound in the tests is only a coarse guard.
+# See docs/decisions.md D34.
+v_max: 0.15
 
 # First-order actuator lag. Off by default: a second-order arm adds tuning
 # burden and moves no result.
