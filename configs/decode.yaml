@@ -1,0 +1,17 @@
+# Composition root for scripts/01_fit_decoders.py.
+#
+# Pulls in paths and the global seed from base, the dataset description, and one
+# decoder. Override the decoder on the command line:
+#
+#     python scripts/01_fit_decoders.py decoder=fbcsp
+
+defaults:
+  - base
+  - data: bci2a
+  - decoder: riemann
+  - _self_
+
+name: decode
+
+# Inner-fold count for any hyperparameter selection. Session E is never touched.
+n_folds: 5

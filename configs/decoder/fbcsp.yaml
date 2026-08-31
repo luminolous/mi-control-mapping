@@ -1,0 +1,33 @@
+# Filter-bank CSP with shrinkage LDA.
+#
+# Everything under `params` is passed straight to the constructor, so a stray
+# key raises rather than being silently ignored. Keys outside it are metadata
+# the pipeline reads and the decoder does not.
+
+name: fbcsp
+
+# Published range on BCI IV-2a. A result far outside it means preprocessing is
+# wrong; the fix is upstream, not in the classifier.
+expected_kappa: [0.40, 0.55]
+
+params:
+  seed: ${seed}
+  sfreq: ${data.sfreq}
+
+  # Nine 4 Hz bands covering 4 to 40 Hz.
+  band_low: 4.0
+  band_high: 40.0
+  band_width: 4.0
+  filter_order: 4
+
+  # Per band. Nine bands give 36 raw features.
+  n_components: 4
+  # Ledoit-Wolf shrinkage keeps the per-class covariances invertible on the
+  # short 3.5 s trials, where the sample count per channel is small.
+  csp_reg: ledoit_wolf
+
+  # Kept after ranking the 36 features by mutual information.
+  n_features: 12
+
+  lda_solver: eigen
+  lda_shrinkage: auto

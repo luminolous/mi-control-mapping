@@ -1,0 +1,15 @@
+# Riemannian tangent space with multinomial logistic regression.
+
+name: riemann
+
+expected_kappa: [0.55, 0.70]
+
+params:
+  seed: ${seed}
+
+  # OAS shrinkage is well conditioned for 22 channels over a 3.5 s trial.
+  cov_estimator: oas
+  metric: riemann
+
+  logreg_c: 1.0
+  max_iter: 500
