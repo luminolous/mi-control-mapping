@@ -81,6 +81,11 @@ sanity:
 # arbitrary: at two targets a success rate can only be 0, 0.5 or 1, so the 0.3
 # chance threshold is unreachable except at exactly zero and the check stops
 # meaning anything.
+#
+# The timeout here is far tighter than the real 600 s, so the mappings that
+# modulate their command magnitude will appear to fail in the smoke grid. That
+# is the timeout, not the mapping. The sanity checks are unaffected: they use a
+# one-hot posterior, on which every mapping commands at full speed.
 env:
   n_targets: 3
   timeout_s: 75.0

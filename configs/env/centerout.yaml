@@ -19,20 +19,26 @@ target_radius: 0.15
 # stay inside continuously.
 dwell_s: 0.5
 
-# Set from the geometry, not by taste. The robot is idle during the 2 s gap and
-# during the first 2.25 s of each burst, before any estimate exists. Targets are
-# not reset between attempts, so consecutive targets can be 2 * radius apart, and
-# the staircase around a diagonal adds a factor of about sqrt(2) to the path.
-# Effective speed is v_max * 1.25 / 5.5 = 0.0273 per second, counting only the
-# 1.25 s of each 5.5 s cycle during which a command exists at all. The worst
-# case is 2 * 1.41 * radius / 0.0273, about 104 s, plus the dwell and the detour
-# around an obstacle.
+# Measured, not derived. Mappings differ in how fast they command: S1 always
+# issues v_max, S2 issues v_max * |sum_k p_k d_k| which measures about 0.65 of
+# it on real posteriors, and S2 with entropy scaling about 0.47. A timeout tight
+# enough to bind therefore records the cautious mappings as failing rather than
+# as slow, which puts a speed artefact inside success_rate, the headline metric
+# of H1 and H2. See docs/decisions.md D42a.
 #
-# At 60 s the oracle acquired only 5 of 8, failing on the two longest reaches
-# while still travelling toward them. A timeout that the oracle cannot meet
-# makes every success rate a measurement of the timeout.
-# `test_timeout_covers_the_worst_case_reach` pins the arithmetic.
-timeout_s: 150.0
+# Swept on subject 1 at the bottom of the quality sweep, eight targets, real
+# cached posteriors, success rate against timeout:
+#
+#   timeout    S1     S2   S2ent    S3
+#      150   0.875  0.792  0.708  0.917
+#      300   1.000  0.958  0.958  1.000
+#      450     -      -    1.000    -      (8 seeds)
+#      600   1.000  1.000  1.000  1.000
+#
+# Every mapping is at its plateau by 450 s. 600 s leaves margin, and costs
+# almost nothing: an episode that succeeds finishes early and never reaches its
+# timeout, so wall time was flat from 450 s to 1200 s.
+timeout_s: 600.0
 
 # Continue from where the previous target was acquired rather than teleporting
 # back to the centre, which would make every attempt identical and discard the

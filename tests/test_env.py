@@ -43,6 +43,10 @@ WINDOW_S = 2.0
 LATENCY_S = 0.25
 COMMAND_S = BURST_S - WINDOW_S - LATENCY_S
 
+# Command magnitude of the slowest mapping relative to v_max, measured on
+# subject 1's real posteriors: S2 with entropy scaling runs at about 0.47.
+SLOWEST_MAPPING_SPEED_FACTOR = 0.47
+
 
 @pytest.fixture
 def cfg() -> DictConfig:
@@ -410,33 +414,41 @@ def test_task_rejects_impossible_settings(
         build_task(cfg, **overrides)
 
 
-def test_timeout_covers_the_worst_case_reach(cfg: DictConfig) -> None:
-    """A timeout the oracle cannot meet turns every success rate into a timeout measurement.
+def test_timeout_covers_the_worst_case_reach_of_the_slowest_mapping(
+    cfg: DictConfig,
+) -> None:
+    """A timeout that binds records a cautious mapping as failing rather than as slow.
 
-    Derived from the geometry so a later config edit fails here rather than
-    silently lowering the ceiling: the robot is idle during the gap, consecutive
-    targets can be two radii apart because attempts are not reset, and the
-    staircase around a diagonal adds about sqrt(2) to the path.
+    The bound is computed for the slowest mapping, not for argmax. S1 always
+    commands at v_max, but S2 commands at the magnitude of the posterior-weighted
+    blend, which measures about 0.65 of v_max on real posteriors, and S2 with
+    entropy scaling about 0.47. Sizing the timeout for argmax alone puts a speed
+    artefact inside success_rate, which is the headline metric of H1 and H2.
+    See docs/decisions.md D42a.
     """
     duty = COMMAND_S / (BURST_S + GAP_S)
-    effective_speed = float(cfg.v_max) * duty
+    effective_speed = float(cfg.v_max) * duty * SLOWEST_MAPPING_SPEED_FACTOR
     worst_case = 2.0 * np.sqrt(2.0) * float(cfg.radius) / effective_speed
 
     assert float(cfg.timeout_s) >= worst_case + float(cfg.dwell_s)
 
 
-def test_per_burst_travel_stays_in_the_measured_window(cfg: DictConfig) -> None:
+def test_per_burst_travel_stays_in_the_verified_range(cfg: DictConfig) -> None:
     """A coarse guard. The oracle ceiling tests are the authority.
 
-    With four directions and eight targets, a diagonal target is approached by
-    alternating cardinals and the robot oscillates around it. Both extremes fail:
-    too large a step and it never dwells inside, too small and the staircase
-    straddles the target rather than settling in it. At exactly one target radius
-    per burst the oracle stalls on a diagonal even at a 200 s timeout; 1.25 radii
-    clears all eight. The workable band is narrow and was found by measurement.
+    An earlier version of this test asserted a narrow band of 1.1 to 1.6 target
+    radii per burst, on the strength of three measurements. A fuller sweep
+    disproved that: with a generous timeout the oracle clears all eight targets
+    at 0.33, 0.67, 0.83, 1.25, 1.50, 1.83, 2.17 and 2.50 radii, and misses one at
+    0.50 and at 1.00. Those two are isolated resonances between the staircase
+    period and the target geometry for a given seed, not the edges of a band.
+
+    So the range checked here is wide, and its purpose is only to catch a config
+    edit that moves v_max or target_radius by an order of magnitude.
+    See docs/decisions.md D34a.
     """
     radii_per_burst = float(cfg.v_max) * COMMAND_S / float(cfg.target_radius)
-    assert 1.1 <= radii_per_burst <= 1.6
+    assert 0.3 <= radii_per_burst <= 2.5
 
 
 def test_uniform_random_commands_stay_near_the_chance_floor(cfg: DictConfig) -> None:
