@@ -335,6 +335,32 @@ def test_epoch_subject_output_feeds_the_splitter(cfg: DictConfig) -> None:
     assert len(test) == 8
 
 
+def test_expected_but_absent_artifact_annotations_raise(cfg: DictConfig) -> None:
+    """A loader that stops preserving rejections must stop the pipeline.
+
+    BCI IV-2a through MOABB carries none, which is why the default is false. On
+    a source that does carry them, flipping this to true turns their silent
+    disappearance into an error instead of a quietly larger training set.
+    """
+    strict = OmegaConf.merge(cfg, {"artifacts": {"expect_annotations": True}})
+    assert isinstance(strict, DictConfig)
+    raws = {"T": [_build_raw(cfg, n_trials=4)], "E": [_build_raw(cfg, n_trials=4)]}
+    with pytest.raises(ValueError, match="expect_annotations is true"):
+        epoch_subject(raws, strict, subject=1)
+
+
+def test_present_artifact_annotations_satisfy_the_expectation(cfg: DictConfig) -> None:
+    strict = OmegaConf.merge(cfg, {"artifacts": {"expect_annotations": True}})
+    assert isinstance(strict, DictConfig)
+    raws = {
+        "T": [_build_raw(cfg, n_trials=8, reject_trials=(1,))],
+        "E": [_build_raw(cfg, n_trials=8)],
+    }
+    result = epoch_subject(raws, strict, subject=1)
+    assert result.n_artifact_dropped == 1
+    assert len(result.trial_meta) == 15
+
+
 def test_epoch_subject_requires_both_sessions(cfg: DictConfig) -> None:
     with pytest.raises(ValueError, match="missing session"):
         epoch_subject({"T": [_build_raw(cfg, n_trials=4)]}, cfg, subject=1)
