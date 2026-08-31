@@ -42,6 +42,10 @@ class Mapping(Protocol):
         """Return a velocity command in workspace units per second."""
         ...
 
+    def bind_task(self, *, targets: np.ndarray, obstacles: np.ndarray) -> None:
+        """Give the mapping the episode geometry, if it needs any."""
+        ...
+
 
 def validate_directions(directions: np.ndarray) -> np.ndarray:
     """Check the class-to-direction table and return it as float64 unit rows.
@@ -123,6 +127,16 @@ class BaseMapping(ABC):
             self.on_new_posterior(row)
 
         return self.command(row, state, dt)
+
+    def bind_task(self, *, targets: np.ndarray, obstacles: np.ndarray) -> None:  # noqa: B027
+        """Give the mapping the episode geometry.
+
+        Only S4 needs it, and only for its autonomy term. Targets and obstacles
+        belong to the episode rather than to the mapping: obstacles are jittered
+        per seed, so they cannot come from the mapping config. The runner calls
+        this on every mapping and the ones that do not need it ignore it; S4
+        raises if it is asked for a command before being bound.
+        """
 
     # Optional hooks, deliberately not abstract: S1 has no state, and forcing
     # every mapping to write two empty overrides would make the stateless case

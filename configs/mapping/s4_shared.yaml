@@ -1,0 +1,38 @@
+# S4: shared control, u = alpha * u_auto(s) + (1 - alpha) * u_user(p).
+#
+# u_user is S2 itself, so alpha = 0 reduces to S2 exactly. entropy_scaling must
+# therefore match configs/mapping/s2_weighted.yaml, or the identity is against
+# the wrong mapping.
+
+name: s4_shared
+
+params:
+  v_max: ${env.v_max}
+  entropy_scaling: false
+
+  # Fixed weight. The alpha sweep overrides this per cell.
+  alpha: 0.5
+  alpha_mode: fixed
+
+  # Used only when alpha_mode is adaptive:
+  #   alpha_t = alpha_min + (alpha_max - alpha_min) * H(p) / log K
+  # so the robot takes over exactly when the user is uncertain.
+  alpha_min: 0.0
+  alpha_max: 0.9
+
+  # `aware` picks the attractive target from the decoded intent, which uses the
+  # decoder output twice. `blind` always attracts toward the active task target
+  # and is the honest control condition. See docs/decisions.md D43.
+  intent_mode: aware
+
+  # Potential field. d0 is the radius beyond which an obstacle is ignored, and
+  # is set just above the obstacle radius of 0.12 so the field is felt before
+  # contact rather than only at it.
+  k_rep: 0.02
+  d0: 0.35
+
+  # How far off the decoded intent a target may be and still be chosen under
+  # `aware`. Outside it the autonomy has no opinion and contributes repulsion
+  # only, rather than falling back on the active target, which would quietly
+  # make `aware` behave like `blind`.
+  angular_window_deg: 60.0

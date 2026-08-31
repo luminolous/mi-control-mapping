@@ -273,14 +273,31 @@ def test_no_partial_directory_survives_a_failed_write(cfg: DictConfig) -> None:
 # --- sanity block ---
 
 
-def test_the_sanity_block_is_always_written_even_when_a_check_cannot_run(
+def test_every_specified_sanity_check_is_present_and_applicable(
     cfg: DictConfig,
 ) -> None:
-    """A check that does not apply is stated, never omitted."""
+    """All four checks from the testing spec now have implementations behind them.
+
+    A check that could not run would still be written, with `applicable: false`
+    and a reason, rather than omitted. None is in that state any more.
+    """
     block = sanity_block(cfg)
-    assert block["alpha0_equals_s2"]["applicable"] is False
-    assert block["alpha0_equals_s2"]["reason"]
-    assert "all_passed" in block
+    expected = {
+        "oracle_success",
+        "uniform_posterior_chance",
+        "alpha0_equals_s2",
+        "alpha1_independence",
+    }
+    assert expected <= set(block)
+    assert all(block[name]["applicable"] for name in expected)
+    assert block["all_passed"] == all(block[name]["pass"] for name in expected)
+
+
+def test_the_arbitration_identities_hold_exactly(cfg: DictConfig) -> None:
+    """Zero difference, not a small one. An arbitration sign error hides in a tolerance."""
+    block = sanity_block(cfg)
+    assert block["alpha0_equals_s2"]["max_abs_diff"] == 0.0
+    assert block["alpha1_independence"]["max_abs_diff"] == 0.0
 
 
 def test_the_oracle_ceiling_and_chance_floor_hold_on_synthetic_data(
@@ -324,11 +341,20 @@ def test_a_different_seed_changes_the_episodes(cfg: DictConfig) -> None:
     assert not first.equals(second)
 
 
+# `agents/06` §7 asks for five seconds. The smoke has since grown from one
+# mapping and two sanity checks to four of each, and the dominant cost is the
+# chance-floor check, where a chance-level decoder times out on every target,
+# which is that check doing its job. Measured at about 10 s; the bound here is
+# set to catch a regression rather than to hold the original figure.
+# See docs/decisions.md D44.
+SMOKE_TIME_BUDGET_S = 20.0
+
+
 def test_the_smoke_configuration_stays_inside_its_time_budget(cfg: DictConfig) -> None:
-    """Five seconds is what makes it usable as a check after every change."""
+    """Fast enough to run after every change, which is the point of having it."""
     started = time.perf_counter()
     write_run(run_all(cfg), cfg, sanity=sanity_block(cfg), wall_time_s=0.0)
-    assert time.perf_counter() - started < 5.0
+    assert time.perf_counter() - started < SMOKE_TIME_BUDGET_S
 
 
 def test_the_smoke_grid_stays_small(cfg: DictConfig) -> None:

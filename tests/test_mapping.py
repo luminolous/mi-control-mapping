@@ -14,11 +14,12 @@ import pytest
 from omegaconf import DictConfig, OmegaConf
 
 from micm.env.dynamics import RobotState
-from micm.env.task import DEFAULT_DIRECTIONS, direction_table
+from micm.env.task import DEFAULT_DIRECTIONS, direction_table, target_positions
 from micm.mapping.argmax import ArgmaxMapping
 from micm.mapping.base import BaseMapping, Mapping, validate_directions, validate_posterior
 from micm.mapping.evidence import EvidenceMapping
 from micm.mapping.registry import MAPPINGS, build_mapping, select_mapping
+from micm.mapping.shared import SharedMapping
 from micm.mapping.weighted import WeightedMapping, normalised_entropy
 from micm.utils import load_config
 
@@ -187,9 +188,7 @@ def test_step_validates_the_posterior_it_is_given() -> None:
 # --- registry ---
 
 
-@pytest.mark.parametrize(
-    "name", ["s1_argmax", "s2_weighted", "s2_weighted_entropy", "s3_evidence"]
-)
+@pytest.mark.parametrize("name", ["s1_argmax", "s2_weighted", "s3_evidence", "s4_shared"])
 def test_registry_builds_every_configured_mapping(name: str) -> None:
     cfg = load_config("experiment/smoke")
     mapping = select_mapping(cfg, name, directions=DEFAULT_DIRECTIONS)
@@ -200,12 +199,10 @@ def test_selecting_a_mapping_the_experiment_did_not_compose_says_how_to_add_it()
     """The grid varies the mapping, so a single composed group could only hold one."""
     cfg = load_config("experiment/smoke")
     with pytest.raises(KeyError, match="does not compose mapping"):
-        select_mapping(cfg, "s4_shared", directions=DEFAULT_DIRECTIONS)
+        select_mapping(cfg, "s5_imaginary", directions=DEFAULT_DIRECTIONS)
 
 
-@pytest.mark.parametrize(
-    "name", ["s1_argmax", "s2_weighted", "s2_weighted_entropy", "s3_evidence"]
-)
+@pytest.mark.parametrize("name", ["s1_argmax", "s2_weighted", "s3_evidence", "s4_shared"])
 def test_the_mapping_speed_limit_follows_the_environment(name: str) -> None:
     """One speed limit, in the env config, so a mapping cannot quietly outrun the robot."""
     cfg = load_config("experiment/smoke")
@@ -235,13 +232,14 @@ def test_registry_rejects_an_unexpected_param() -> None:
         build_mapping(cfg, directions=DEFAULT_DIRECTIONS)
 
 
-def test_the_registry_holds_the_mappings_implemented_so_far() -> None:
-    """S4 lands in T11; this fails loudly when it does, which is the point."""
+def test_the_registry_holds_every_mapping_in_the_study() -> None:
+    """All four strategies, with S2 in both of its configured variants."""
     assert set(MAPPINGS) == {
         "s1_argmax",
         "s2_weighted",
         "s2_weighted_entropy",
         "s3_evidence",
+        "s4_shared",
     }
 
 
@@ -453,3 +451,302 @@ def test_s3_rejects_bad_parameters(kwargs: dict[str, float], match: str) -> None
     }
     with pytest.raises(ValueError, match=match):
         EvidenceMapping(**settings)  # type: ignore[arg-type]
+
+
+# --- S4: shared control ---
+
+TARGETS = target_positions(8, 1.0)
+OBSTACLES = np.array([[0.45, 0.45], [-0.45, -0.45]])
+
+
+def make_shared(
+    alpha: float = 0.5,
+    intent_mode: str = "aware",
+    alpha_mode: str = "fixed",
+    *,
+    obstacles: np.ndarray | None = None,
+    entropy_scaling: bool = False,
+) -> SharedMapping:
+    mapping = SharedMapping(
+        directions=DEFAULT_DIRECTIONS,
+        v_max=V_MAX,
+        alpha=alpha,
+        alpha_mode=alpha_mode,
+        alpha_min=0.0,
+        alpha_max=0.9,
+        intent_mode=intent_mode,
+        entropy_scaling=entropy_scaling,
+        k_rep=0.02,
+        d0=0.35,
+        angular_window_deg=60.0,
+    )
+    mapping.bind_task(
+        targets=TARGETS, obstacles=OBSTACLES if obstacles is None else obstacles
+    )
+    mapping.reset(np.random.default_rng(0))
+    return mapping
+
+
+def state_at(pos: tuple[float, float], target_idx: int = 0) -> RobotState:
+    return RobotState(
+        pos=np.array(pos, dtype=np.float64),
+        vel=np.zeros(2),
+        target_idx=target_idx,
+        dwell_t=0.0,
+        t=0.0,
+    )
+
+
+@pytest.mark.parametrize(
+    "posterior",
+    [
+        np.array([0.7, 0.1, 0.1, 0.1]),
+        np.array([0.1, 0.4, 0.25, 0.25]),
+        np.array([0.25, 0.25, 0.25, 0.25]),
+        np.array([0.0, 1.0, 0.0, 0.0]),
+    ],
+)
+def test_alpha_zero_is_exactly_s2(posterior: np.ndarray) -> None:
+    """Bit equality, not closeness. S4 uses S2 itself rather than a copy of it."""
+    shared = make_shared(alpha=0.0)
+    weighted = WeightedMapping(
+        directions=DEFAULT_DIRECTIONS, v_max=V_MAX, entropy_scaling=False
+    )
+    state = state_at((0.2, -0.1), target_idx=3)
+
+    np.testing.assert_array_equal(
+        shared.step(posterior, state, DT), weighted.step(posterior, state, DT)
+    )
+
+
+def test_alpha_zero_matches_s2_without_any_task_geometry() -> None:
+    """At alpha 0 the autonomy term is never consulted, so it need not exist."""
+    unbound = SharedMapping(
+        directions=DEFAULT_DIRECTIONS,
+        v_max=V_MAX,
+        alpha=0.0,
+        alpha_mode="fixed",
+        alpha_min=0.0,
+        alpha_max=0.9,
+        intent_mode="aware",
+        entropy_scaling=False,
+        k_rep=0.02,
+        d0=0.35,
+        angular_window_deg=60.0,
+    )
+    unbound.reset(np.random.default_rng(0))
+    posterior = np.array([0.7, 0.1, 0.1, 0.1])
+    weighted = WeightedMapping(
+        directions=DEFAULT_DIRECTIONS, v_max=V_MAX, entropy_scaling=False
+    )
+    np.testing.assert_array_equal(
+        unbound.step(posterior, state_at((0.0, 0.0)), DT),
+        weighted.step(posterior, state_at((0.0, 0.0)), DT),
+    )
+
+
+def test_an_unbound_mapping_raises_rather_than_guessing_the_geometry() -> None:
+    mapping = SharedMapping(
+        directions=DEFAULT_DIRECTIONS,
+        v_max=V_MAX,
+        alpha=1.0,
+        alpha_mode="fixed",
+        alpha_min=0.0,
+        alpha_max=0.9,
+        intent_mode="blind",
+        entropy_scaling=False,
+        k_rep=0.02,
+        d0=0.35,
+        angular_window_deg=60.0,
+    )
+    mapping.reset(np.random.default_rng(0))
+    with pytest.raises(RuntimeError, match="bind_task"):
+        mapping.step(np.array([0.7, 0.1, 0.1, 0.1]), state_at((0.0, 0.0)), DT)
+
+
+def test_intent_blind_at_alpha_one_ignores_the_posterior_entirely() -> None:
+    """The alpha = 1 independence check: two decoders, identical behaviour."""
+    mapping = make_shared(alpha=1.0, intent_mode="blind", obstacles=np.zeros((0, 2)))
+    state = state_at((0.1, 0.1), target_idx=2)
+
+    first = mapping.step(np.array([0.7, 0.1, 0.1, 0.1]), state, DT)
+    second = mapping.step(np.array([0.1, 0.1, 0.1, 0.7]), state, DT)
+    np.testing.assert_array_equal(first, second)
+
+
+def test_intent_aware_at_alpha_one_still_reads_the_posterior() -> None:
+    """Not a bug: this is the leakage the intent-blind ablation exists to expose.
+
+    Under `aware` the decoder informs the choice of attractive target, so part of
+    what looks like shared control succeeding is the decoder working through the
+    autonomy term. A test asserting independence here would be asserting the
+    wrong thing.
+    """
+    mapping = make_shared(alpha=1.0, intent_mode="aware", obstacles=np.zeros((0, 2)))
+    state = state_at((0.0, 0.0), target_idx=0)
+
+    first = mapping.step(np.array([0.02, 0.94, 0.02, 0.02]), state, DT)
+    second = mapping.step(np.array([0.02, 0.02, 0.02, 0.94]), state, DT)
+    assert not np.allclose(first, second)
+
+
+def test_intent_blind_pulls_toward_the_active_target() -> None:
+    mapping = make_shared(alpha=1.0, intent_mode="blind", obstacles=np.zeros((0, 2)))
+    state = state_at((0.0, 0.0), target_idx=2)
+
+    command = mapping.step(np.array([0.7, 0.1, 0.1, 0.1]), state, DT)
+    expected = TARGETS[2] / float(np.hypot(*TARGETS[2])) * V_MAX
+    np.testing.assert_allclose(command, expected, atol=1e-9)
+
+
+def test_intent_aware_picks_the_target_the_posterior_points_at() -> None:
+    mapping = make_shared(alpha=1.0, intent_mode="aware", obstacles=np.zeros((0, 2)))
+    # Class 1 is +x, and target 0 sits at (1, 0). The active target is elsewhere.
+    command = mapping.step(
+        np.array([0.02, 0.94, 0.02, 0.02]), state_at((0.0, 0.0), target_idx=4), DT
+    )
+    np.testing.assert_allclose(command, np.array([V_MAX, 0.0]), atol=1e-9)
+
+
+def test_intent_aware_withholds_attraction_outside_the_angular_window() -> None:
+    """Falling back on the active target would quietly make `aware` behave like `blind`."""
+    mapping = make_shared(alpha=1.0, intent_mode="aware", obstacles=np.zeros((0, 2)))
+    # Sitting at the centre of the circle of targets with a uniform posterior:
+    # the blend has no direction, so the autonomy has no opinion.
+    command = mapping.step(np.full(4, 0.25), state_at((0.0, 0.0), target_idx=0), DT)
+    np.testing.assert_allclose(command, np.zeros(2), atol=1e-12)
+
+
+def test_repulsion_pushes_back_on_a_head_on_approach() -> None:
+    mapping = make_shared(alpha=1.0, intent_mode="blind", obstacles=np.array([[0.5, 0.0]]))
+    # Target 0 is at (1, 0), the obstacle sits directly between.
+    near = mapping.autonomy_command(state_at((0.35, 0.0)), np.full(4, 0.25))
+    far = mapping.autonomy_command(state_at((0.0, 0.0)), np.full(4, 0.25))
+
+    assert near[0] < far[0]
+
+
+def test_repulsion_falls_to_nothing_beyond_its_range() -> None:
+    mapping = make_shared(alpha=1.0, intent_mode="blind", obstacles=np.array([[0.5, 0.0]]))
+    without = make_shared(alpha=1.0, intent_mode="blind", obstacles=np.zeros((0, 2)))
+    state = state_at((-0.5, 0.0))  # a full unit from the obstacle, well beyond d0
+
+    np.testing.assert_allclose(
+        mapping.autonomy_command(state, np.full(4, 0.25)),
+        without.autonomy_command(state, np.full(4, 0.25)),
+    )
+
+
+def test_a_grazing_pass_is_deflected_sideways() -> None:
+    """Head-on repulsion opposes progress; a grazing one should mostly steer."""
+    mapping = make_shared(alpha=1.0, intent_mode="blind", obstacles=np.array([[0.5, 0.2]]))
+    command = mapping.autonomy_command(state_at((0.45, 0.0)), np.full(4, 0.25))
+    assert command[1] < 0.0
+
+
+def test_the_autonomy_command_respects_the_speed_limit() -> None:
+    mapping = make_shared(alpha=1.0, intent_mode="blind", obstacles=np.array([[0.01, 0.0]]))
+    command = mapping.autonomy_command(state_at((0.011, 0.0)), np.full(4, 0.25))
+    assert float(np.hypot(*command)) <= V_MAX + 1e-9
+
+
+def test_adaptive_alpha_rises_with_uncertainty() -> None:
+    """The robot takes over exactly when the user is unsure, which is what H3 tests."""
+    mapping = make_shared(alpha_mode="adaptive")
+    assert mapping.effective_alpha(np.array([0.0, 1.0, 0.0, 0.0])) == pytest.approx(0.0)
+    assert mapping.effective_alpha(np.full(4, 0.25)) == pytest.approx(0.9)
+
+    middling = mapping.effective_alpha(np.array([0.1, 0.6, 0.15, 0.15]))
+    assert 0.0 < middling < 0.9
+
+
+def test_adaptive_alpha_at_full_certainty_reduces_to_s2() -> None:
+    mapping = make_shared(alpha_mode="adaptive")
+    weighted = WeightedMapping(
+        directions=DEFAULT_DIRECTIONS, v_max=V_MAX, entropy_scaling=False
+    )
+    one_hot = np.array([0.0, 1.0, 0.0, 0.0])
+    np.testing.assert_array_equal(
+        mapping.step(one_hot, state_at((0.2, 0.2), target_idx=1), DT),
+        weighted.step(one_hot, state_at((0.2, 0.2), target_idx=1), DT),
+    )
+
+
+def test_a_higher_alpha_moves_the_command_toward_the_autonomy() -> None:
+    posterior = np.array([0.7, 0.1, 0.1, 0.1])  # points -x
+    state = state_at((0.0, 0.0), target_idx=0)  # active target is +x
+
+    low = make_shared(alpha=0.2, intent_mode="blind", obstacles=np.zeros((0, 2)))
+    high = make_shared(alpha=0.8, intent_mode="blind", obstacles=np.zeros((0, 2)))
+    assert high.step(posterior, state, DT)[0] > low.step(posterior, state, DT)[0]
+
+
+def test_s4_returns_zero_without_a_posterior() -> None:
+    np.testing.assert_array_equal(make_shared().step(None, state_at((0.0, 0.0)), DT), np.zeros(2))
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "match"),
+    [
+        ({"alpha": 1.5}, "alpha"),
+        ({"alpha_mode": "linear"}, "alpha_mode"),
+        ({"intent_mode": "psychic"}, "intent_mode"),
+        ({"alpha_min": 0.9, "alpha_max": 0.1}, "alpha_min"),
+        ({"d0": 0.0}, "d0"),
+        ({"angular_window_deg": 0.0}, "angular_window_deg"),
+    ],
+)
+def test_s4_rejects_bad_parameters(kwargs: dict[str, object], match: str) -> None:
+    settings: dict[str, object] = {
+        "directions": DEFAULT_DIRECTIONS,
+        "v_max": V_MAX,
+        "alpha": 0.5,
+        "alpha_mode": "fixed",
+        "alpha_min": 0.0,
+        "alpha_max": 0.9,
+        "intent_mode": "aware",
+        "entropy_scaling": False,
+        "k_rep": 0.02,
+        "d0": 0.35,
+        "angular_window_deg": 60.0,
+        **kwargs,
+    }
+    with pytest.raises(ValueError, match=match):
+        SharedMapping(**settings)  # type: ignore[arg-type]
+
+
+def test_the_s4_config_shares_s2s_entropy_setting() -> None:
+    """Or the alpha = 0 identity would be against a mapping S2 is not."""
+    cfg = load_config("experiment/smoke")
+    assert cfg.mappings.s4_shared.params.entropy_scaling == (
+        cfg.mappings.s2_weighted.params.entropy_scaling
+    )
+
+
+def test_a_grid_override_for_a_parameter_a_mapping_lacks_raises() -> None:
+    """A cell claiming an alpha for argmax would record a condition that never applied."""
+    cfg = load_config("experiment/smoke")
+    with pytest.raises(KeyError, match="has no such parameter"):
+        select_mapping(
+            cfg, "s1_argmax", directions=DEFAULT_DIRECTIONS, overrides={"alpha": 0.5}
+        )
+
+
+def test_a_none_override_is_ignored() -> None:
+    cfg = load_config("experiment/smoke")
+    mapping = select_mapping(
+        cfg,
+        "s1_argmax",
+        directions=DEFAULT_DIRECTIONS,
+        overrides={"alpha": None, "intent_mode": None},
+    )
+    assert isinstance(mapping, Mapping)
+
+
+def test_a_grid_override_reaches_the_mapping() -> None:
+    cfg = load_config("experiment/smoke")
+    built = select_mapping(
+        cfg, "s4_shared", directions=DEFAULT_DIRECTIONS, overrides={"alpha": 0.25}
+    )
+    assert isinstance(built, SharedMapping)
+    assert built.alpha == pytest.approx(0.25)

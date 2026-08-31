@@ -128,7 +128,7 @@ def episodes_frame(
                 "latency_ms": cell.latency_ms,
                 "protocol": cell.protocol,
                 "error_struct": cell.error_struct,
-                "intent_mode": cell.intent_mode,
+                "intent_mode": cell.intent_mode,  # None becomes <NA> in a string column
                 "seed": cell.seed,
                 "direction_perm": result.direction_perm,
                 "kappa_offline": result.kappa_offline,

@@ -55,8 +55,14 @@ def main(argv: list[str] | None = None) -> int:
     print(f"episodes    {len(run.episodes)}")
     print(f"sanity      all_passed={sanity['all_passed']}")
     for key, entry in sanity.items():
-        if isinstance(entry, dict) and entry.get("applicable"):
-            print(f"  {key}: value={entry['value']} pass={entry['pass']}")
+        if not (isinstance(entry, dict) and entry.get("applicable")):
+            continue
+        numbers = " ".join(
+            f"{field}={value}"
+            for field, value in entry.items()
+            if isinstance(value, (int, float)) and not isinstance(value, bool)
+        )
+        print(f"  {key}: pass={entry['pass']}  {numbers}")
     return 0 if sanity["all_passed"] else 1
 
 

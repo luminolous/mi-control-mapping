@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-from omegaconf import DictConfig
+from omegaconf import DictConfig, OmegaConf
 
 from micm.env.metrics import EpisodeMetrics, summarize
 from micm.env.task import CenterOutTask, direction_table
@@ -228,9 +228,10 @@ class Cell:
     quality_level: float
     protocol: str
     error_struct: str
-    intent_mode: str
-    # None for a mapping without an autonomy weight, which the episode row
-    # records as NaN.
+    # None for a mapping that has no such parameter, which the episode row
+    # records as NaN or as a null string. Setting either on a grid that also
+    # holds argmax would name a parameter argmax does not have.
+    intent_mode: str | None
     alpha: float | None
     latency_ms: int
     seed: int
@@ -285,15 +286,25 @@ def run_episode(
     cfg: DictConfig,
     *,
     kappa_offline: float = float("nan"),
+    rng_key: tuple[Any, ...] | None = None,
 ) -> EpisodeResult:
     """Simulate one episode and return its metrics.
+
+    Args:
+        rng_key: overrides the cell identity used to derive the random stream.
+            The experiment never passes it: an episode's randomness must depend
+            on which cell it belongs to, so that re-running a subset reproduces
+            the full grid. The arbitration sanity checks do pass it, because
+            comparing two mappings for an exact identity requires them to see the
+            same direction permutation, target order and trial draws, and the
+            cell key includes the mapping name.
 
     Raises:
         KeyError: if the posterior file holds no burst of a class the task asks
             for, which would otherwise mean silently replaying the wrong intent.
     """
     started = time.perf_counter()
-    rng = generator_for(int(cfg.seed), *cell.key())
+    rng = generator_for(int(cfg.seed), *(rng_key if rng_key is not None else cell.key()))
 
     permutation = rng.permutation(int(cfg.data.n_classes))
     directions = direction_table(permutation)
@@ -310,9 +321,6 @@ def run_episode(
     )
 
     pool = TrialPool(perturbed, arrays["label"], arrays["burst_id"], arrays["t_rel"], rng)
-    mapping = select_mapping(cfg, cell.mapping, directions=directions)
-    mapping.reset(rng)
-
     env = cfg.env
     task = CenterOutTask(
         n_targets=int(env.n_targets),
@@ -331,6 +339,17 @@ def run_episode(
         directions=directions,
     )
     task.reset()
+
+    # After the task, because the autonomy term of S4 needs the episode geometry
+    # and the obstacles are jittered per seed.
+    mapping = select_mapping(
+        cfg,
+        cell.mapping,
+        directions=directions,
+        overrides={"alpha": cell.alpha, "intent_mode": cell.intent_mode},
+    )
+    mapping.bind_task(targets=task.targets, obstacles=task.obstacles)
+    mapping.reset(rng)
 
     dt = float(env.dt)
     burst_s = float(cfg.data.epoch.tmax) - float(cfg.data.epoch.tmin)
@@ -437,7 +456,9 @@ def enumerate_cells(cfg: DictConfig) -> list[Cell]:
                                                     quality_level=float(level),
                                                     protocol=str(protocol),
                                                     error_struct=str(error_struct),
-                                                    intent_mode=str(intent_mode),
+                                                    intent_mode=None
+                                                    if intent_mode is None
+                                                    else str(intent_mode),
                                                     alpha=None
                                                     if alpha is None
                                                     else float(alpha),
@@ -564,7 +585,7 @@ def success_rates_at(
             quality_level=quality_level,
             protocol=str(cfg.replay.protocol),
             error_struct=ERROR_NONE,
-            intent_mode="aware",
+            intent_mode=None,
             alpha=None,
             latency_ms=int(cfg.grid.latencies_ms[0]),
             seed=seed,
@@ -582,6 +603,117 @@ def success_rates_at(
         )
         rates.append(run_episode(cell, arrays, cfg).metrics.success_rate)
     return rates
+
+
+def _identity_config(cfg: DictConfig) -> DictConfig:
+    """A two-target environment for the two arbitration identities.
+
+    Both are exact identities rather than statistics: either the trajectories
+    match or they do not, and two targets settle it as conclusively as eight.
+    Running them on the full task would only make the smoke slower.
+
+    Two rather than one because a one-choice task carries no information and the
+    ITR metric refuses it, which is the metric being right rather than a limit.
+    """
+    # A short timeout as well: the identity holds or fails on the first
+    # divergent step, so there is nothing to gain from letting the episode run
+    # to completion.
+    reduced = OmegaConf.merge(cfg, {"env": {"n_targets": 2, "timeout_s": 30.0}})
+    assert isinstance(reduced, DictConfig)
+    return reduced
+
+
+def _sanity_episode(
+    cfg: DictConfig,
+    mapping: str,
+    arrays: dict[str, np.ndarray],
+    *,
+    seed: int = 0,
+    alpha: float | None = None,
+    intent_mode: str | None = None,
+) -> EpisodeMetrics:
+    """One episode under a named mapping, for the arbitration sanity checks.
+
+    Every call shares one random stream, so the only difference between two
+    episodes is the mapping under test.
+    """
+    cell = Cell(
+        experiment="sanity_arbitration",
+        subject=int(cfg.grid.subjects[0]),
+        decoder="synthetic",
+        mapping=mapping,
+        quality_level=0.0,
+        protocol=str(cfg.replay.protocol),
+        error_struct=ERROR_NONE,
+        intent_mode=intent_mode,
+        alpha=alpha,
+        latency_ms=int(cfg.grid.latencies_ms[0]),
+        seed=seed,
+    )
+    return run_episode(cell, arrays, cfg, rng_key=("sanity_arbitration", seed)).metrics
+
+
+def _sanity_arrays(cfg: DictConfig, accuracy: float, tag: str) -> dict[str, np.ndarray]:
+    return synthetic_arrays(
+        generator_for(int(cfg.seed), "sanity", tag, accuracy),
+        n_bursts=int(cfg.synthetic.n_bursts),
+        n_windows=int(cfg.synthetic.n_windows),
+        n_classes=int(cfg.data.n_classes),
+        accuracy=accuracy,
+        window_s=float(cfg.replay.window_s),
+        stride_s=float(cfg.replay.stride_s),
+        confidence=float(cfg.synthetic.confidence),
+    )
+
+
+def alpha_zero_matches_s2(cfg: DictConfig) -> dict[str, Any]:
+    """S4 at alpha 0 must reproduce S2 exactly, trajectory for trajectory.
+
+    Catches an arbitration sign error, which would otherwise show up as S4 simply
+    performing differently from S2 and be indistinguishable from a real effect.
+    """
+    reduced = _identity_config(cfg)
+    arrays = _sanity_arrays(cfg, 0.75, "alpha0")
+    shared = _sanity_episode(reduced, "s4_shared", arrays, alpha=0.0)
+    weighted = _sanity_episode(reduced, "s2_weighted", arrays)
+
+    difference = abs(shared.success_rate - weighted.success_rate) + abs(
+        shared.episode_duration_s - weighted.episode_duration_s
+    )
+    return {
+        "max_abs_diff": round(float(difference), 9),
+        "s4_success": round(shared.success_rate, 6),
+        "s2_success": round(weighted.success_rate, 6),
+        "pass": difference == 0.0,
+        "applicable": True,
+    }
+
+
+def alpha_one_ignores_the_decoder(cfg: DictConfig) -> dict[str, Any]:
+    """S4 at alpha 1, intent-blind, must give the same episode for any decoder.
+
+    Checked on the intent-blind variant only. Intent-aware chooses its attractive
+    target from the posterior, so it is decoder-dependent at alpha 1 by
+    construction; that dependence is the leakage the ablation exists to measure,
+    not a fault to check for here. See docs/decisions.md D43.
+    """
+    reduced = _identity_config(cfg)
+    weak = _sanity_arrays(cfg, 0.4, "alpha1_weak")
+    strong = _sanity_arrays(cfg, 0.95, "alpha1_strong")
+
+    first = _sanity_episode(reduced, "s4_shared", weak, alpha=1.0, intent_mode="blind")
+    second = _sanity_episode(reduced, "s4_shared", strong, alpha=1.0, intent_mode="blind")
+
+    difference = abs(first.success_rate - second.success_rate) + abs(
+        first.episode_duration_s - second.episode_duration_s
+    )
+    return {
+        "max_abs_diff": round(float(difference), 9),
+        "weak_decoder_success": round(first.success_rate, 6),
+        "strong_decoder_success": round(second.success_rate, 6),
+        "pass": difference == 0.0,
+        "applicable": True,
+    }
 
 
 def sanity_block(cfg: DictConfig) -> dict[str, Any]:
@@ -648,11 +780,8 @@ def sanity_block(cfg: DictConfig) -> dict[str, Any]:
             "pass": chance <= float(cfg.sanity.chance_threshold),
             "applicable": True,
         },
-        "alpha0_equals_s2": {
-            "applicable": False,
-            "reason": "requires mapping s4_shared, which lands in T11",
-            "pass": None,
-        },
+        "alpha0_equals_s2": alpha_zero_matches_s2(cfg),
+        "alpha1_independence": alpha_one_ignores_the_decoder(cfg),
     }
     checks["all_passed"] = all(
         entry["pass"]
