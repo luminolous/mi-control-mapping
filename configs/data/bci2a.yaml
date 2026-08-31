@@ -1,0 +1,103 @@
+# BCI Competition IV-2a, fetched through MOABB.
+#
+# Nine subjects, two sessions each, 22 EEG channels plus 3 EOG, 250 Hz, four
+# classes. Trial structure: fixation at t = 0, cue at t = 2 s, imagery until
+# t = 6 s. Every constant the pipeline reads lives here, including channel
+# names and the filter band.
+
+name: bci2a
+moabb_dataset: BNCI2014_001
+
+subjects: [1, 2, 3, 4, 5, 6, 7, 8, 9]
+sfreq: 250.0
+n_classes: 4
+
+# MOABB session keys mapped onto the names used everywhere else in the project.
+# These keys changed between MOABB major versions, so the loader verifies them
+# against what the dataset actually returns and raises on a mismatch rather than
+# guessing.
+session_keys:
+  "0train": T
+  "1test": E
+
+channels:
+  # Verified 2026-08-31 against a real download. MOABB returns 26 channels:
+  # 22 EEG, three EOG named EOG1..EOG3, and a STI stim channel.
+  #
+  # Two mechanisms, deliberately overlapping. Dropping by name catches a loader
+  # that types a non-EEG channel as EEG; picking by type catches a channel this
+  # list does not know about. The count check below then confirms the result,
+  # so neither mechanism can quietly do nothing.
+  drop_names: ["EOG1", "EOG2", "EOG3", "STI"]
+  pick_eeg_only: true
+  expected_eeg: 22
+
+filter:
+  l_freq: 4.0
+  h_freq: 38.0
+  # Causal by default. A zero-phase filter uses future samples, which a real
+  # online system does not have. See docs/decisions.md D7.
+  filtfilt: false
+  iir_order: 4
+  iir_ftype: butter
+
+# Exponential moving standardization per channel, applied to the continuous
+# recording before epoching so it stays causal.
+standardize:
+  # MNE keeps EEG in volts, so a raw sample is around 1e-5. That is smaller than
+  # `eps` below, which would make every division fall back to eps and leave the
+  # signal unstandardized at roughly a tenth of unit variance. Converting to
+  # microvolts first is what makes `eps` mean what it is supposed to mean: a
+  # guard against a dead channel, not the usual denominator.
+  # Verified 2026-08-31: without this the standardized std is 0.064, and EEGNet
+  # sits at chance while the covariance decoders, being scale invariant, hide it.
+  input_scale: 1.0e6
+  factor_new: 0.001
+  init_block_size: 1000
+  eps: 1.0e-4
+  # Post-standardization sanity bounds on the per-recording standard deviation.
+  # Outside these the scaling is wrong, which no downstream step would report.
+  expected_std_range: [0.2, 5.0]
+
+epoch:
+  # Relative to cue onset. 0.5 to 4.0 gives a 3.5 s imagery window.
+  tmin: 0.5
+  tmax: 4.0
+  # Shift from an annotation onset to cue onset. Measured, not assumed: MOABB's
+  # BNCI2014_001 annotations sit on the cue itself, so this is zero. Do not
+  # infer it from `dataset.interval`, which reports [2, 6] and describes the
+  # paradigm relative to trial start, not the anchor of the annotations MOABB
+  # actually emits. See docs/decisions.md D13b for the offset sweep that settled
+  # this and the two independent confirmations.
+  event_offset_s: 0.0
+  # Excluding tmax makes the epoch exactly (tmax - tmin) * sfreq samples, which
+  # keeps the replay window arithmetic free of off-by-one corrections.
+  include_tmax: false
+  # A recording can stop a fraction of a second after its last trial's imagery
+  # period, leaving that trial's window a few samples short. Such a trial is
+  # dropped and counted. A shortfall larger than this means the epoch geometry
+  # is wrong rather than the file ending early, and still raises.
+  # Verified 2026-08-31: subject 1 run 0 falls short by 0.088 s.
+  max_truncation_s: 0.5
+
+artifacts:
+  # MOABB hides the source artifact flags unless asked. With "annotate" it emits
+  # a `bnci_artifact` annotation per flagged trial, spanning the imagery period.
+  # "ignore" is MOABB's default and silently keeps every trial.
+  moabb_handling: annotate
+
+  # Annotation descriptions that mark a rejected trial. `bnci_artifact` is what
+  # MOABB emits; the other two cover the raw GDF code and MOABB's alternative
+  # "annotate_bad" mode.
+  reject_labels: ["bnci_artifact", "BAD_artifact", "1023"]
+  drop_flagged: true
+
+  # Verified 2026-08-31: subject 1 carries 22 flagged trials, 15 in session T
+  # and 7 in session E. The flags exist, so their absence is now an error rather
+  # than something to note and continue past. See docs/decisions.md D10b.
+  expect_annotations: true
+
+expected:
+  runs_per_session: 6
+  trials_per_run: 48
+  trials_per_session: 288

@@ -1,0 +1,58 @@
+# Sequential center-out reaching, eight targets, static obstacles.
+#
+# The speed limit is the parameter that decides whether the task is solvable at
+# all. A burst holds one command for `burst_s`, so a perfect decoder travels
+# `v_max * burst_s` in a straight line before it can change direction. With four
+# directions and eight targets a diagonal target is approached in a staircase,
+# and the staircase settles into a limit cycle whose amplitude is roughly that
+# per-burst step. Capture therefore needs the step to be no larger than the
+# target, which is what ties v_max to target_radius below.
+# See docs/decisions.md D28.
+
+name: centerout
+
+n_targets: 8
+radius: 1.0
+target_radius: 0.15
+
+# Momentary contact is reachable by drift, so an acquisition needs the robot to
+# stay inside continuously.
+dwell_s: 0.5
+
+# Set from the geometry, not by taste. The robot is idle during the 2 s gap, so
+# its effective speed is v_max * 3.5 / 5.5 = 0.0318 per second. Targets are not
+# reset between attempts, so consecutive targets can be 2 * radius apart, and
+# the staircase around a diagonal adds a factor of about sqrt(2) to the path.
+# The worst case is therefore 2 * 1.41 * radius / 0.0318, about 89 s, plus the
+# dwell and the detour around an obstacle.
+#
+# At 60 s the oracle acquired only 5 of 8, failing on the two longest reaches
+# while still travelling toward them. A timeout that the oracle cannot meet
+# makes every success rate a measurement of the timeout.
+# `test_timeout_covers_the_worst_case_reach` pins the arithmetic.
+timeout_s: 120.0
+
+# Continue from where the previous target was acquired rather than teleporting
+# back to the centre, which would make every attempt identical and discard the
+# sequencing the task is meant to exercise.
+reset_between_targets: false
+
+# 100 Hz, zero-order hold between the 4 Hz decoder updates.
+dt: 0.01
+
+# 0.05 * 3.5 s = 0.175 per burst, just above target_radius. Slower makes every
+# episode longer for no change in conclusion; faster and the staircase around a
+# diagonal target never settles inside the target.
+v_max: 0.05
+
+# First-order actuator lag. Off by default: a second-order arm adds tuning
+# burden and moves no result.
+tau: 0.0
+
+obstacles:
+  # Placed off the target circle and away from the centre, so they obstruct the
+  # diagonal approaches without making any target unreachable.
+  positions: [[0.45, 0.45], [-0.45, -0.45], [0.45, -0.45]]
+  radius: 0.12
+  # Per-seed positional noise. Zero keeps the layout fixed across seeds.
+  jitter: 0.0

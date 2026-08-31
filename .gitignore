@@ -148,14 +148,19 @@ activemq-data/
 *.sage.py
 
 # Environments
+#
+# Anchored to the repository root with a leading slash. Unanchored, `env/`
+# matches a directory named `env` at ANY depth, and on a case-insensitive
+# filesystem `ENV/` matches it too, so both were excluding `src/micm/env/` and
+# `configs/env/` from version control.
 .env
 .envrc
-.venv
-env/
-venv/
-ENV/
-env.bak/
-venv.bak/
+/.venv
+/env/
+/venv/
+/ENV/
+/env.bak/
+/venv.bak/
 
 # Spyder project settings
 .spyderproject
@@ -225,8 +230,11 @@ CLAUDE.md
 docs/decisions.md
 
 # Datasets and run outputs. Both are reproducible from configs and are large.
-data/
-artifacts/
+#
+# Anchored: unanchored, `data/` also matched `src/micm/data/` and
+# `configs/data/`, silently keeping the data pipeline out of the repository.
+/data/
+/artifacts/
 
 # Cached posteriors and any other npz artifact. Golden fixtures are the
 # exception: the whole point of a golden file is that it is versioned.

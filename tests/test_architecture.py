@@ -12,6 +12,8 @@ convenient import at a time, so it is checked mechanically.
 from __future__ import annotations
 
 import ast
+import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -170,3 +172,83 @@ def test_viz_is_not_imported_by_the_pipeline() -> None:
     """Figures read run directories; nothing upstream of them depends on plotting."""
     for subpackage in ("data", "decoders", "replay", "mapping", "env", "eval"):
         assert "micm.viz" not in imports_of(f"src/micm/{subpackage}")
+
+
+# --- version control ---
+
+# Paths that belong in the repository. A gitignore pattern swallowing any of
+# these loses work silently: the files exist locally, every test passes, and
+# they are simply absent from the next clone.
+MUST_BE_TRACKED = (
+    "src/micm",
+    "tests",
+    "scripts",
+    "configs",
+    "pyproject.toml",
+    "Makefile",
+    ".python-version",
+)
+
+# Deliberately excluded, checked so a future edit cannot start committing a
+# multi-gigabyte dataset or the local working documents.
+MUST_BE_IGNORED = (
+    "data/raw/anything",
+    "artifacts/posteriors/anything.npz",
+    ".venv/pyvenv.cfg",
+    ".agents/00-overview.md",
+    "CLAUDE.md",
+    "docs/decisions.md",
+)
+
+
+def _ignored(paths: list[str]) -> set[str]:
+    """Which of `paths` git would ignore, asked in one call.
+
+    NUL-separated in both directions. In its normal mode git quotes and escapes
+    paths, and a Windows checkout adds carriage returns, both of which would make
+    the comparisons below fail for reasons unrelated to gitignore.
+    """
+    result = subprocess.run(
+        ["git", "check-ignore", "--stdin", "-z"],
+        input="\0".join(paths).encode("utf-8"),
+        capture_output=True,
+        cwd=REPO_ROOT,
+        check=False,
+    )
+    return {
+        entry.decode("utf-8").replace("\\", "/") for entry in result.stdout.split(b"\0") if entry
+    }
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git is not installed")
+@pytest.mark.skipif(not (REPO_ROOT / ".git").exists(), reason="not a git working tree")
+def test_no_source_file_is_gitignored() -> None:
+    """The stock Python gitignore excludes `env/`, `ENV/`, `lib/`, `build/` and more.
+
+    None of those are anchored, so each matches a directory of that name at any
+    depth. `env/` and `ENV/` were excluding `src/micm/env/` and `configs/env/`,
+    and an unanchored `data/` was excluding `src/micm/data/` and `configs/data/`,
+    which is the entire data pipeline. Nothing about that raises: the code runs,
+    the tests pass, and the files are missing from the next clone.
+    """
+    candidates: list[str] = []
+    for entry in MUST_BE_TRACKED:
+        path = REPO_ROOT / entry
+        if path.is_dir():
+            candidates.extend(
+                str(file.relative_to(REPO_ROOT)).replace("\\", "/")
+                for file in path.rglob("*")
+                if file.is_file() and "__pycache__" not in file.parts
+            )
+        elif path.is_file():
+            candidates.append(entry)
+
+    assert candidates, "found no source files to check"
+    assert _ignored(candidates) == set()
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git is not installed")
+@pytest.mark.skipif(not (REPO_ROOT / ".git").exists(), reason="not a git working tree")
+def test_large_and_local_paths_stay_ignored() -> None:
+    """The other direction: anchoring the patterns must not have un-ignored the data."""
+    assert _ignored(list(MUST_BE_IGNORED)) == {p.replace("\\", "/") for p in MUST_BE_IGNORED}
