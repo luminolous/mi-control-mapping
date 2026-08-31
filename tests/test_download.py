@@ -166,6 +166,16 @@ def test_empty_report_is_vacuously_ok() -> None:
     assert DownloadReport(subjects=()).ok
 
 
+def test_artifact_handling_is_not_left_at_moabb_default(cfg: DictConfig) -> None:
+    """MOABB's default is "ignore", which discards the source artifact flags silently.
+
+    The flags exist for this dataset (22 flagged trials on subject 1), so leaving
+    the default would quietly fit the decoders on trials the recording marked as
+    contaminated.
+    """
+    assert str(cfg.data.artifacts.moabb_handling) in {"annotate", "annotate_bad", "reject"}
+
+
 def test_build_dataset_rejects_an_unknown_name(cfg: DictConfig) -> None:
     """No getattr on a config string: an unsupported dataset fails before any download."""
     from omegaconf import OmegaConf

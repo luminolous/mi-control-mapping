@@ -95,22 +95,27 @@ def main(argv: list[str] | None = None) -> int:
             joblib.dump(decoder, out / f"{subject:02d}_{decoder_name}_{cfg_hash}.pkl")
 
     kappas = np.array([row[4] for row in rows])
-    header = f"{'subj':>4}  {'train':>6}  {'test':>5}  {'acc':>6}  {'kappa':>6}  range"
+    header = f"{'subj':>4}  {'train':>6}  {'test':>5}  {'acc':>6}  {'kappa':>6}"
     print(f"\ndecoder={decoder_name}  config_hash={cfg_hash}")
     print(f"event_offset_s={float(cfg.data.epoch.event_offset_s)}")
     print(header)
     print("-" * len(header))
     for subject, n_train, n_test, acc, kappa in rows:
-        flag = "ok" if low <= kappa <= high else ("LOW" if kappa < low else "high")
-        print(
-            f"{subject:>4}  {n_train:>6}  {n_test:>5}  {acc:>6.3f}  {kappa:>6.3f}  {flag}"
-        )
-    print(
-        f"\nmean kappa {kappas.mean():.3f} over {len(kappas)} subject(s), "
-        f"published range {low:.2f} to {high:.2f}"
-    )
+        print(f"{subject:>4}  {n_train:>6}  {n_test:>5}  {acc:>6.3f}  {kappa:>6.3f}")
 
-    if kappas.mean() < low:
+    # The published range describes the mean over subjects, not any one subject.
+    # Between-subject spread on IV-2a is larger than most effects of interest,
+    # so a single subject outside the range says nothing on its own.
+    verdict = "within" if low <= kappas.mean() <= high else "OUTSIDE"
+    print(
+        f"\nmean kappa {kappas.mean():.3f} (sd {kappas.std(ddof=1) if len(kappas) > 1 else 0.0:.3f}) "
+        f"over {len(kappas)} subject(s)"
+    )
+    print(f"published cross-subject range {low:.2f} to {high:.2f}: {verdict}")
+    if len(kappas) < 9:
+        print("note: fewer than 9 subjects, the comparison to the range is not meaningful yet")
+
+    if len(kappas) == 9 and kappas.mean() < low:
         logger.warning(
             "mean kappa is below the published range. The cause is upstream of the "
             "classifier: check the epoch anchoring, the filter band, and the split"

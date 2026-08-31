@@ -184,31 +184,37 @@ def test_epoch_starts_on_the_expected_sample(cfg: DictConfig) -> None:
         assert result.X[trial, 0, -1] == pytest.approx(expected_start + n_times - 1)
 
 
-def test_configured_window_matches_the_moabb_interval(cfg: DictConfig) -> None:
-    """The absolute window taken from each annotation must be [2.5, 6.0] s.
+def test_configured_window_sits_inside_the_imagery_period(cfg: DictConfig) -> None:
+    """The window taken from each annotation must be [0.5, 4.0] s.
 
-    MOABB anchors BNCI2014_001 events at trial start and reports its imagery
-    interval as [2, 6] from that anchor. Our epoch is expressed relative to the
-    cue, so `event_offset_s` has to carry the 2 s from trial start to cue. If
-    that offset is ever set back to zero, every epoch moves 2 s earlier, lands
-    on the fixation period, and the decoders quietly drop to chance.
+    MOABB's annotations sit on the cue, and imagery runs for 4 s from there, so
+    the window has to stay inside [0, 4]. This was measured with an offset
+    sweep, not inferred from `dataset.interval`, which reports [2, 6] and
+    describes the paradigm relative to trial start. An offset of 2 pushes the
+    window 2 s into the inter-trial break; on subject 1 that costs 0.25 kappa
+    and raises nothing. See docs/decisions.md D13b.
     """
     offset = float(cfg.epoch.event_offset_s)
-    assert offset + float(cfg.epoch.tmin) == pytest.approx(2.5)
-    assert offset + float(cfg.epoch.tmax) == pytest.approx(6.0)
+    start = offset + float(cfg.epoch.tmin)
+    stop = offset + float(cfg.epoch.tmax)
+
+    assert start == pytest.approx(0.5)
+    assert stop == pytest.approx(4.0)
+    assert 0.0 <= start < stop <= 4.0
 
 
 def test_epoch_offset_shifts_the_extracted_samples(cfg: DictConfig) -> None:
     """A ramp signal shows the offset moving the cut, not just sitting in config."""
+    probe = 1.0
     raw = _build_raw(cfg, n_trials=2, ramp=True)
-    shifted = OmegaConf.merge(cfg, {"epoch": {"event_offset_s": 0.0}})
+    shifted = OmegaConf.merge(cfg, {"epoch": {"event_offset_s": probe}})
     assert isinstance(shifted, DictConfig)
 
-    with_offset = epoch_raw(raw, cfg, subject=1, session="T", run=0)
-    without = epoch_raw(raw, shifted, subject=1, session="T", run=0)
+    baseline = epoch_raw(raw, cfg, subject=1, session="T", run=0)
+    moved = epoch_raw(raw, shifted, subject=1, session="T", run=0)
 
-    delta = float(cfg.epoch.event_offset_s) * SFREQ
-    assert with_offset.X[0, 0, 0] - without.X[0, 0, 0] == pytest.approx(delta)
+    delta = (probe - float(cfg.epoch.event_offset_s)) * SFREQ
+    assert moved.X[0, 0, 0] - baseline.X[0, 0, 0] == pytest.approx(delta)
 
 
 def test_epoch_raw_returns_documented_shapes_and_dtypes(cfg: DictConfig) -> None:
@@ -227,10 +233,22 @@ def test_epoch_raw_rejects_an_unknown_session(cfg: DictConfig) -> None:
         epoch_raw(_build_raw(cfg, n_trials=2), cfg, subject=1, session="X", run=0)
 
 
-def test_trial_running_past_the_recording_raises(cfg: DictConfig) -> None:
-    """A truncated trial is a problem with the recording, not something to drop."""
+def test_a_slightly_truncated_trial_is_dropped_and_counted(cfg: DictConfig) -> None:
+    """Recordings stop shortly after the last trial. That trial is dropped, not padded."""
+    window_end = FIRST_CUE_S + TRIAL_SPACING_S + float(cfg.epoch.event_offset_s) + float(
+        cfg.epoch.tmax
+    )
+    raw = _build_raw(cfg, n_trials=2, duration_s=window_end - 0.1)
+    result = epoch_raw(raw, cfg, subject=1, session="T", run=0)
+
+    assert result.n_truncated_dropped == 1
+    assert len(result.trial_meta) == 1
+
+
+def test_a_badly_truncated_trial_raises(cfg: DictConfig) -> None:
+    """A large shortfall means the epoch geometry is wrong, not that the file ended early."""
     raw = _build_raw(cfg, n_trials=2, duration_s=FIRST_CUE_S + TRIAL_SPACING_S + 1.0)
-    with pytest.raises(ValueError, match="needs samples"):
+    with pytest.raises(ValueError, match="epoch geometry is wrong"):
         epoch_raw(raw, cfg, subject=1, session="T", run=0)
 
 
@@ -324,18 +342,24 @@ def test_causal_filtering_is_the_default(cfg: DictConfig) -> None:
 
 
 def _subject_data(cfg: DictConfig, *, n_trials: int = 8) -> EpochedData:
-    raws = {
-        "T": [_build_raw(cfg, n_trials=n_trials), _build_raw(cfg, n_trials=n_trials)],
-        "E": [_build_raw(cfg, n_trials=n_trials)],
-    }
-    return epoch_subject(raws, cfg, subject=1)
+    """Two T runs and one E run, each carrying one flagged trial.
+
+    The flagged trial is there because `artifacts.expect_annotations` is true for
+    this dataset, so a run with no rejection information is an error.
+    """
+
+    def run() -> mne.io.RawArray:
+        return _build_raw(cfg, n_trials=n_trials, reject_trials=(0,))
+
+    return epoch_subject({"T": [run(), run()], "E": [run()]}, cfg, subject=1)
 
 
 def test_epoch_subject_concatenates_sessions_in_order(cfg: DictConfig) -> None:
     result = _subject_data(cfg)
     sessions = list(result.trial_meta["session"])
-    assert sessions == ["T"] * 16 + ["E"] * 8
-    assert result.X.shape == (24, len(EEG_NAMES), epoch_length(cfg, SFREQ))
+    assert sessions == ["T"] * 14 + ["E"] * 7
+    assert result.n_artifact_dropped == 3
+    assert result.X.shape == (21, len(EEG_NAMES), epoch_length(cfg, SFREQ))
 
 
 def test_epoch_subject_numbers_trials_by_position(cfg: DictConfig) -> None:
@@ -353,8 +377,8 @@ def test_epoch_subject_output_feeds_the_splitter(cfg: DictConfig) -> None:
 
     result = _subject_data(cfg)
     train, test = train_test_indices(result.trial_meta)
-    assert len(train) == 16
-    assert len(test) == 8
+    assert len(train) == 14
+    assert len(test) == 7
 
 
 def test_expected_but_absent_artifact_annotations_raise(cfg: DictConfig) -> None:
