@@ -33,6 +33,10 @@ from micm.data.epoching import (
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SFREQ = 250.0
 EEG_NAMES = tuple(f"EEG-{i:02d}" for i in range(22))
+# The non-EEG channels MOABB actually returns for BNCI2014_001, verified against
+# a real download. Tied to the config by
+# `test_config_drop_names_match_the_montage_under_test`.
+NON_EEG = (("EOG1", "eog"), ("EOG2", "eog"), ("EOG3", "eog"), ("STI", "stim"))
 TRIAL_SPACING_S = 8.0
 FIRST_CUE_S = 10.0
 
@@ -57,9 +61,8 @@ def _build_raw(
     With `ramp=True` every channel holds its own sample index, so an epoch's
     first value reveals exactly which sample it was cut from.
     """
-    eog_names = tuple(str(name) for name in cfg.channels.eog_names)
-    names = [*EEG_NAMES, *eog_names]
-    types = ["eeg"] * len(EEG_NAMES) + ["eog"] * len(eog_names)
+    names = [*EEG_NAMES, *(name for name, _ in NON_EEG)]
+    types = ["eeg"] * len(EEG_NAMES) + [kind for _, kind in NON_EEG]
 
     total_s = duration_s if duration_s is not None else FIRST_CUE_S + TRIAL_SPACING_S * n_trials
     n_samples = int(total_s * SFREQ)
@@ -212,7 +215,7 @@ def test_epoch_raw_returns_documented_shapes_and_dtypes(cfg: DictConfig) -> None
     raw = _build_raw(cfg, n_trials=8)
     result = epoch_raw(raw, cfg, subject=3, session="E", run=2)
 
-    assert result.X.shape == (8, len(EEG_NAMES) + 3, epoch_length(cfg, SFREQ))
+    assert result.X.shape == (8, len(EEG_NAMES) + len(NON_EEG), epoch_length(cfg, SFREQ))
     assert result.X.dtype == np.float32
     assert result.y.dtype == np.int8
     assert set(result.y.tolist()) == {0, 1, 2, 3}
@@ -264,9 +267,28 @@ def test_flagged_trials_are_kept_when_dropping_is_disabled(cfg: DictConfig) -> N
 # --- preprocessing ---
 
 
-def test_preprocess_drops_eog_and_keeps_channel_order(cfg: DictConfig) -> None:
+def test_config_drop_names_match_the_montage_under_test(cfg: DictConfig) -> None:
+    """Keeps the synthetic montage honest about what the real download returns."""
+    assert tuple(name for name, _ in NON_EEG) == tuple(cfg.channels.drop_names)
+
+
+def test_preprocess_drops_non_eeg_and_keeps_channel_order(cfg: DictConfig) -> None:
     prepared = preprocess_raw(_build_raw(cfg, n_trials=4), cfg)
     assert tuple(prepared.ch_names) == EEG_NAMES
+
+
+def test_named_drop_removes_a_channel_mistyped_as_eeg(cfg: DictConfig) -> None:
+    """First mechanism: a loader that types EOG as EEG must not slip through."""
+    raw = _build_raw(cfg, n_trials=4)
+    raw.set_channel_types({"EOG1": "eeg"}, verbose=False)
+    assert tuple(preprocess_raw(raw, cfg).ch_names) == EEG_NAMES
+
+
+def test_type_pick_removes_a_channel_the_drop_list_does_not_know(cfg: DictConfig) -> None:
+    """Second mechanism: an unlisted non-EEG channel is caught by the type pick."""
+    raw = _build_raw(cfg, n_trials=4)
+    raw.rename_channels({"EOG3": "SURPRISE"})
+    assert tuple(preprocess_raw(raw, cfg).ch_names) == EEG_NAMES
 
 
 def test_preprocess_does_not_mutate_the_input(cfg: DictConfig) -> None:
