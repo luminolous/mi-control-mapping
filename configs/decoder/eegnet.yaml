@@ -1,0 +1,42 @@
+# EEGNet v4 through braindecode, trained with a plain PyTorch loop.
+#
+# `device` is a constructor parameter and therefore part of the config hash,
+# unlike the top-level `device` key which is excluded from it. That is
+# deliberate: a float32 network does not produce bit-identical posteriors on CPU
+# and GPU, so the two runs are genuinely different artifacts and must not share
+# a cache entry. See docs/decisions.md D19.
+
+name: eegnet
+
+expected_kappa: [0.55, 0.70]
+
+params:
+  seed: ${seed}
+  device: ${device}
+  sfreq: ${data.sfreq}
+
+  # Architecture. Roughly 2,000 parameters at these settings.
+  f1: 8
+  depth_multiplier: 2
+  f2: 16
+  # 64 samples is 256 ms at 250 Hz, about one cycle of the lowest retained rhythm.
+  kernel_length: 64
+  drop_prob: 0.25
+  # Not braindecode's default of 0.01. With about 200 training trials an epoch is
+  # a handful of batches, and a 0.01 momentum leaves the running statistics
+  # roughly 25 epochs behind the weights. Validation runs in eval mode, so the
+  # decoder reports chance while its training loss falls normally.
+  # See docs/decisions.md D20.
+  batch_norm_momentum: 0.1
+
+  # Optimisation. AdamW with a cosine schedule over the full budget.
+  n_epochs: 200
+  # 32 rather than 64: more optimiser steps per epoch on a small subject.
+  batch_size: 32
+  lr: 0.001
+  weight_decay: 0.0
+
+  # Early stopping on an inner validation split taken from session T only.
+  # Session E is never reachable from here.
+  val_fraction: 0.2
+  patience: 30

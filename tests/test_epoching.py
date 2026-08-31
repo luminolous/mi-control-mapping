@@ -419,3 +419,31 @@ def test_epoch_subject_rejects_a_changed_montage(cfg: DictConfig) -> None:
         epoch_subject(
             {"T": [_build_raw(cfg, n_trials=4)], "E": [other]}, cfg, subject=1
         )
+
+
+def test_preprocess_output_is_actually_standardized(cfg: DictConfig) -> None:
+    """Unit variance, not a tenth of it.
+
+    MNE keeps EEG in volts, around 1e-5 per sample, which is below the eps guard
+    in the standardizer. Without the microvolt conversion every division falls
+    back to eps and the signal leaves preprocessing unstandardized. Covariance
+    decoders are scale invariant and hide it; EEGNet goes to chance.
+    """
+    prepared = preprocess_raw(_build_raw(cfg, n_trials=4), cfg)
+    low, high = (float(v) for v in cfg.standardize.expected_std_range)
+    assert low <= float(prepared.get_data().std()) <= high
+
+
+def test_wrong_input_scale_is_reported(
+    cfg: DictConfig, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The exact bug that shipped, now caught by a check rather than by a chance kappa."""
+    unscaled = OmegaConf.merge(cfg, {"standardize": {"input_scale": 1.0}})
+    assert isinstance(unscaled, DictConfig)
+
+    with caplog.at_level("WARNING", logger="micm.micm.data.epoching"):
+        prepared = preprocess_raw(_build_raw(cfg, n_trials=4), unscaled)
+
+    low, _ = (float(v) for v in cfg.standardize.expected_std_range)
+    assert float(prepared.get_data().std()) < low
+    assert any("outside the expected" in record.message for record in caplog.records)

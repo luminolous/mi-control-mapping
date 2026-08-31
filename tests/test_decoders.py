@@ -16,6 +16,7 @@ from __future__ import annotations
 import joblib
 import numpy as np
 import pytest
+import torch
 from omegaconf import DictConfig, OmegaConf
 from sklearn.metrics import cohen_kappa_score
 
@@ -26,6 +27,7 @@ from micm.decoders.base import (
     validate_labels,
     validate_posterior,
 )
+from micm.decoders.eegnet import EEGNetDecoder, resolve_device
 from micm.decoders.fbcsp import FBCSPDecoder, band_edges, bandpass
 from micm.decoders.registry import DECODERS, build_decoder
 from micm.decoders.riemann import RiemannDecoder
@@ -83,12 +85,48 @@ def make_riemann(seed: int = 1337) -> RiemannDecoder:
     )
 
 
-DECODER_FACTORIES = {"fbcsp": make_fbcsp, "riemann": make_riemann}
+def make_eegnet(seed: int = 1337) -> EEGNetDecoder:
+    """Small training budget, so the shared contract stays fast to check.
+
+    The published settings live in configs/decoder/eegnet.yaml; the numbers here
+    exist only to exercise the code path.
+    """
+    return EEGNetDecoder(
+        seed=seed,
+        device="cpu",
+        sfreq=SFREQ,
+        f1=8,
+        depth_multiplier=2,
+        f2=16,
+        kernel_length=32,
+        drop_prob=0.25,
+        batch_norm_momentum=0.1,
+        n_epochs=40,
+        batch_size=16,
+        lr=0.005,
+        weight_decay=0.0,
+        val_fraction=0.25,
+        patience=40,
+    )
+
+
+DECODER_FACTORIES = {"fbcsp": make_fbcsp, "riemann": make_riemann, "eegnet": make_eegnet}
 
 
 @pytest.fixture(scope="module")
 def trials() -> tuple[np.ndarray, np.ndarray]:
     return synthetic_trials()
+
+
+@pytest.fixture(scope="module", params=list(DECODER_FACTORIES), ids=list(DECODER_FACTORIES))
+def fitted(request, trials):  # type: ignore[no-untyped-def]
+    """One fitted decoder per implementation, shared by the read-only checks.
+
+    Module scoped because fitting EEGNet is the slowest thing in the suite and
+    none of the checks that use this fixture mutate the decoder.
+    """
+    X, y = trials
+    return DECODER_FACTORIES[request.param]().fit(X, y)
 
 
 # --- the shared contract ---
@@ -100,10 +138,9 @@ def test_decoder_satisfies_the_protocol(factory) -> None:  # type: ignore[no-unt
     assert isinstance(factory(), BaseDecoder)
 
 
-@pytest.mark.parametrize("factory", DECODER_FACTORIES.values(), ids=DECODER_FACTORIES)
-def test_predict_proba_returns_a_valid_posterior(factory, trials) -> None:  # type: ignore[no-untyped-def]
-    X, y = trials
-    posterior = factory().fit(X, y).predict_proba(X)
+def test_predict_proba_returns_a_valid_posterior(fitted, trials) -> None:  # type: ignore[no-untyped-def]
+    X, _ = trials
+    posterior = fitted.predict_proba(X)
 
     assert posterior.shape == (len(X), N_CLASSES)
     assert posterior.dtype == np.float32
@@ -111,11 +148,10 @@ def test_predict_proba_returns_a_valid_posterior(factory, trials) -> None:  # ty
     assert (posterior >= 0.0).all()
 
 
-@pytest.mark.parametrize("factory", DECODER_FACTORIES.values(), ids=DECODER_FACTORIES)
-def test_decoder_separates_the_synthetic_classes(factory, trials) -> None:  # type: ignore[no-untyped-def]
+def test_decoder_separates_the_synthetic_classes(fitted, trials) -> None:  # type: ignore[no-untyped-def]
     """Not a claim about EEG. A decoder failing this cannot be debugged on real data."""
     X, y = trials
-    predicted = factory().fit(X, y).predict_proba(X).argmax(axis=1)
+    predicted = fitted.predict_proba(X).argmax(axis=1)
     assert cohen_kappa_score(y, predicted) > 0.5
 
 
@@ -128,14 +164,12 @@ def test_fitting_is_deterministic(factory, trials) -> None:  # type: ignore[no-u
     np.testing.assert_array_equal(first, second)
 
 
-@pytest.mark.parametrize("factory", DECODER_FACTORIES.values(), ids=DECODER_FACTORIES)
-def test_fitted_decoder_round_trips_through_joblib(factory, trials, tmp_path) -> None:  # type: ignore[no-untyped-def]
-    X, y = trials
-    decoder = factory().fit(X, y)
-    expected = decoder.predict_proba(X)
+def test_fitted_decoder_round_trips_through_joblib(fitted, trials, tmp_path) -> None:  # type: ignore[no-untyped-def]
+    X, _ = trials
+    expected = fitted.predict_proba(X)
 
     path = tmp_path / "decoder.pkl"
-    joblib.dump(decoder, path)
+    joblib.dump(fitted, path)
     np.testing.assert_array_equal(joblib.load(path).predict_proba(X), expected)
 
 
@@ -146,25 +180,28 @@ def test_predict_before_fit_raises(factory, trials) -> None:  # type: ignore[no-
         factory().predict_proba(X)
 
 
-@pytest.mark.parametrize("factory", DECODER_FACTORIES.values(), ids=DECODER_FACTORIES)
-def test_channel_count_change_between_fit_and_predict_raises(factory, trials) -> None:  # type: ignore[no-untyped-def]
+def test_channel_count_change_between_fit_and_predict_raises(fitted, trials) -> None:  # type: ignore[no-untyped-def]
     """A changed montage would otherwise produce confident nonsense."""
-    X, y = trials
-    decoder = factory().fit(X, y)
+    X, _ = trials
     with pytest.raises(ValueError, match="montage changed"):
-        decoder.predict_proba(X[:, :-1])
+        fitted.predict_proba(X[:, :-1])
 
 
 @pytest.mark.parametrize("factory", DECODER_FACTORIES.values(), ids=DECODER_FACTORIES)
 def test_decoder_does_not_touch_global_random_state(factory, trials) -> None:  # type: ignore[no-untyped-def]
-    """Fitting must not move numpy's global stream, or nothing else stays reproducible."""
+    """Fitting must not move the global streams, or nothing else stays reproducible."""
     X, y = trials
     np.random.seed(0)
-    before = np.random.rand()
+    numpy_before = np.random.rand()
+    torch.manual_seed(0)
+    torch_before = torch.rand(1).item()
 
     np.random.seed(0)
+    torch.manual_seed(0)
     factory().fit(X, y)
-    assert np.random.rand() == before
+
+    assert np.random.rand() == numpy_before
+    assert torch.rand(1).item() == torch_before
 
 
 # --- input validation ---
@@ -255,7 +292,7 @@ def test_fbcsp_rejects_more_features_than_the_bank_produces(trials) -> None:  # 
 # --- registry ---
 
 
-@pytest.mark.parametrize("name", ["fbcsp", "riemann"])
+@pytest.mark.parametrize("name", ["fbcsp", "riemann", "eegnet"])
 def test_registry_builds_each_decoder_from_its_config(name: str) -> None:
     cfg = load_config("decode", overrides=(f"decoder={name}",))
     decoder = build_decoder(cfg.decoder)
@@ -270,7 +307,7 @@ def test_registry_config_seed_follows_the_global_seed() -> None:
     assert built.seed == 99
 
 
-@pytest.mark.parametrize("name", ["fbcsp", "riemann"])
+@pytest.mark.parametrize("name", ["fbcsp", "riemann", "eegnet"])
 def test_every_decoder_config_declares_its_published_kappa_range(name: str) -> None:
     """The range is what tells the user a bad result is upstream of the classifier."""
     cfg = load_config("decode", overrides=(f"decoder={name}",))
@@ -302,5 +339,134 @@ def test_registry_rejects_an_unexpected_param() -> None:
         build_decoder(OmegaConf.create(node))
 
 
-def test_registry_lists_both_cpu_decoders() -> None:
-    assert set(DECODERS) == {"fbcsp", "riemann"}
+def test_registry_lists_every_decoder() -> None:
+    assert set(DECODERS) == {"fbcsp", "riemann", "eegnet"}
+
+
+# --- EEGNet specifics ---
+
+
+def test_resolve_device_accepts_cpu() -> None:
+    assert resolve_device("cpu").type == "cpu"
+
+
+def test_resolve_device_warns_loudly_when_cuda_is_unavailable(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A run that meant to use the GPU and quietly did not has meaningless timings."""
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+    with caplog.at_level("WARNING", logger="micm.micm.decoders.eegnet"):
+        device = resolve_device("cuda")
+
+    assert device.type == "cpu"
+    assert any("Falling back to CPU" in record.message for record in caplog.records)
+
+
+def test_resolve_device_honours_cuda_when_available(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    assert resolve_device("cuda").type == "cuda"
+
+
+def test_resolve_device_rejects_an_unknown_device() -> None:
+    with pytest.raises(ValueError, match="unsupported device"):
+        resolve_device("tpu")
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "match"),
+    [
+        ("val_fraction", 0.0, "val_fraction"),
+        ("val_fraction", 1.0, "val_fraction"),
+        ("n_epochs", 0, "n_epochs"),
+        ("patience", 0, "patience"),
+    ],
+)
+def test_eegnet_rejects_bad_training_parameters(field: str, value: float, match: str) -> None:
+    kwargs: dict[str, object] = {
+        "seed": 1,
+        "device": "cpu",
+        "sfreq": SFREQ,
+        "f1": 8,
+        "depth_multiplier": 2,
+        "f2": 16,
+        "kernel_length": 32,
+        "drop_prob": 0.25,
+        "batch_norm_momentum": 0.1,
+        "n_epochs": 5,
+        "batch_size": 8,
+        "lr": 0.01,
+        "weight_decay": 0.0,
+        "val_fraction": 0.25,
+        "patience": 3,
+    }
+    kwargs[field] = value
+    with pytest.raises(ValueError, match=match):
+        EEGNetDecoder(**kwargs)  # type: ignore[arg-type]
+
+
+def test_eegnet_records_its_early_stopping_state(trials) -> None:  # type: ignore[no-untyped-def]
+    """The selected epoch has to be inspectable, or early stopping cannot be reviewed."""
+    X, y = trials
+    decoder = make_eegnet().fit(X, y)
+
+    assert decoder.best_epoch_ is not None
+    assert 0 <= decoder.best_epoch_ < decoder.n_epochs
+    assert decoder.best_val_loss_ is not None
+    assert np.isfinite(decoder.best_val_loss_)
+
+
+def test_eegnet_inner_split_is_stratified_and_stays_inside_its_input(trials) -> None:  # type: ignore[no-untyped-def]
+    """Early stopping must never see session E. It only ever sees what fit was given."""
+    _, y = trials
+    decoder = make_eegnet()
+    inner_train, inner_val = decoder._inner_split(np.asarray(y, dtype=np.int64))
+
+    assert set(inner_train.tolist()).isdisjoint(inner_val.tolist())
+    assert set(inner_train.tolist()) | set(inner_val.tolist()) == set(range(len(y)))
+    assert set(np.unique(y[inner_val]).tolist()) == set(range(N_CLASSES))
+
+
+def test_eegnet_checkpoint_loads_onto_cpu_regardless_of_fitted_device(
+    trials, tmp_path
+) -> None:  # type: ignore[no-untyped-def]
+    """A checkpoint fitted on a GPU box must open on a machine without one."""
+    X, y = trials
+    decoder = make_eegnet().fit(X, y)
+
+    path = tmp_path / "eegnet.pkl"
+    joblib.dump(decoder, path)
+    restored = joblib.load(path)
+
+    assert all(param.device.type == "cpu" for param in restored._model.parameters())
+    np.testing.assert_array_equal(restored.predict_proba(X), decoder.predict_proba(X))
+
+
+def test_eegnet_eval_mode_agrees_with_train_mode(trials) -> None:  # type: ignore[no-untyped-def]
+    """Batch-norm running statistics must track the weights they normalise.
+
+    braindecode's default momentum of 0.01 is faithful to the Keras original,
+    which saw far more batches per epoch. On one subject an epoch is a handful of
+    batches, so the running estimates lag the weights badly. Validation and
+    prediction both run in eval mode and read those stale statistics, so the
+    decoder reports chance while its training loss falls normally. Nothing about
+    that raises, and the training loss curve looks healthy throughout.
+
+    Comparing the two modes on the same data is the cheapest way to see it.
+    """
+    X, y = trials
+    decoder = make_eegnet().fit(X, y)
+    model = decoder._model
+    assert model is not None
+
+    batch = torch.from_numpy(np.asarray(X, dtype=np.float32))
+    with torch.no_grad():
+        model.eval()
+        eval_accuracy = float((model(batch).argmax(1).numpy() == y).mean())
+        model.train()
+        train_accuracy = float((model(batch).argmax(1).numpy() == y).mean())
+        model.eval()
+
+    assert eval_accuracy > train_accuracy - 0.15, (
+        f"eval mode {eval_accuracy:.3f} against train mode {train_accuracy:.3f}: "
+        "the batch-norm running statistics do not match the weights"
+    )

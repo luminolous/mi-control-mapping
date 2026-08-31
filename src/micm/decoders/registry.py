@@ -12,12 +12,14 @@ from typing import Any
 from omegaconf import DictConfig, OmegaConf
 
 from micm.decoders.base import Decoder
+from micm.decoders.eegnet import EEGNetDecoder
 from micm.decoders.fbcsp import FBCSPDecoder
 from micm.decoders.riemann import RiemannDecoder
 
 DECODERS: dict[str, type[Any]] = {
     FBCSPDecoder.name: FBCSPDecoder,
     RiemannDecoder.name: RiemannDecoder,
+    EEGNetDecoder.name: EEGNetDecoder,
 }
 
 
