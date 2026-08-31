@@ -45,6 +45,10 @@ class TargetOutcome:
     acquired: bool
     duration_s: float
     path_length: float
+    # Shortest distance that could have acquired this target: to the target's
+    # BOUNDARY, not its centre. Acquisition needs the robot inside the radius, so
+    # measuring to the centre makes the ideal path longer than an achievable one
+    # and lets path efficiency exceed 1.
     straight_line: float
     collisions: int
 
@@ -377,8 +381,10 @@ class CenterOutTask:
                 acquired=acquired,
                 duration_s=self._t - self._target_started_at,
                 path_length=self._target_path,
-                straight_line=float(
-                    np.hypot(*(self.active_target - self._target_start_pos))
+                straight_line=max(
+                    float(np.hypot(*(self.active_target - self._target_start_pos)))
+                    - self.target_radius,
+                    0.0,
                 ),
                 collisions=self._target_collisions,
             )

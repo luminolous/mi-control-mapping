@@ -19,7 +19,12 @@ defaults:
   - /replay: burst
   - /quality: gap_fraction
   - /env: centerout
-  - /mapping: s1_argmax
+  # Every mapping the grid may name, each under its own key, because the grid
+  # varies the mapping and a single composed group could only hold one.
+  - /mapping@mappings.s1_argmax: s1_argmax
+  - /mapping@mappings.s2_weighted: s2_weighted
+  - /mapping@mappings.s2_weighted_entropy: s2_weighted_entropy
+  - /mapping@mappings.s3_evidence: s3_evidence
   - _self_
 
 name: smoke
@@ -41,8 +46,8 @@ posterior_hash: null
 grid:
   subjects: [1]
   decoders: [synthetic]
-  mappings: [s1_argmax]
-  quality_levels: [0.0, 1.0]
+  mappings: [s1_argmax, s2_weighted, s2_weighted_entropy, s3_evidence]
+  quality_levels: [1.0]
   protocols: [burst]
   error_structures: [none]
   intent_modes: [aware]
@@ -61,17 +66,21 @@ error_structure:
   burst_p_flip: 0.2
   burst_mean_len: 3.0
 
-# A hard cap on how many bursts one episode may consume, so a mapping that never
-# acquires anything still terminates.
-max_bursts_per_episode: 40
-
 sanity:
-  n_episodes: 2
+  # The oracle posterior is one-hot, so one episode settles it per mapping.
+  oracle_episodes: 1
+  # The chance floor is a rate, and with a handful of targets a single episode
+  # can only report multiples of 1/n_targets. Several episodes give it enough
+  # resolution to sit meaningfully below the threshold.
+  chance_episodes: 3
   oracle_threshold: 0.95
   chance_threshold: 0.3
 
-# Two targets rather than eight, and a short timeout, to stay inside the five
-# second budget. Everything else is the real environment.
+# Three targets rather than eight, and a shorter timeout, to stay inside the five
+# second budget. Everything else is the real environment. The size is not
+# arbitrary: at two targets a success rate can only be 0, 0.5 or 1, so the 0.3
+# chance threshold is unreachable except at exactly zero and the check stops
+# meaning anything.
 env:
-  n_targets: 2
-  timeout_s: 60.0
+  n_targets: 3
+  timeout_s: 75.0

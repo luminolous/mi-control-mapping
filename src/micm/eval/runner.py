@@ -25,7 +25,7 @@ from omegaconf import DictConfig
 
 from micm.env.metrics import EpisodeMetrics, summarize
 from micm.env.task import CenterOutTask, direction_table
-from micm.mapping.registry import build_mapping
+from micm.mapping.registry import select_mapping
 from micm.replay.cache import posterior_path, read_posteriors
 from micm.replay.latency import LatencyBuffer
 from micm.replay.perturb import (
@@ -310,7 +310,7 @@ def run_episode(
     )
 
     pool = TrialPool(perturbed, arrays["label"], arrays["burst_id"], arrays["t_rel"], rng)
-    mapping = build_mapping(cfg.mapping, directions=directions)
+    mapping = select_mapping(cfg, cell.mapping, directions=directions)
     mapping.reset(rng)
 
     env = cfg.env
@@ -341,11 +341,25 @@ def run_episode(
 
     buffer: LatencyBuffer[np.ndarray] = LatencyBuffer(latency_s)
     bursts_without_command = 0
-    max_bursts = int(cfg.max_bursts_per_episode)
 
-    for _ in range(max_bursts):
-        if task.done:
-            break
+    # The task's own per-target timeout already bounds the episode, so this is a
+    # guard against a non-terminating task rather than a budget. It is derived
+    # rather than configured on purpose: a fixed cap that happens to bind would
+    # end the episode with targets never attempted, and those would be counted
+    # as failures, which is indistinguishable from genuine failure.
+    # See docs/decisions.md D38.
+    cycle_s = burst_s + gap_s
+    burst_budget = int(np.ceil(int(env.n_targets) * float(env.timeout_s) / cycle_s)) + 2
+
+    bursts_used = 0
+    while not task.done:
+        bursts_used += 1
+        if bursts_used > burst_budget:
+            raise RuntimeError(
+                f"episode ran past {burst_budget} bursts without finishing, which the "
+                f"per-target timeout of {float(env.timeout_s)}s should have made "
+                "impossible; the task is not terminating"
+            )
 
         burst = pool.draw(task.intended_class())
         buffer.reset()
@@ -367,7 +381,11 @@ def run_episode(
             if available is None:
                 outcome = task.step(None, decoder_update=False)
             else:
-                commanded = True
+                # A burst counts as commanded only if some non-zero command was
+                # actually issued. S3 can hold a posterior without ever crossing
+                # its threshold, which is legitimate and must be recorded rather
+                # than smoothed over as a zero command.
+                commanded = commanded or bool(np.any(command))
                 outcome = task.step(
                     command,
                     decoded_intent=_decoded_direction(available, directions),
@@ -572,40 +590,55 @@ def sanity_block(cfg: DictConfig) -> dict[str, Any]:
     Never suppressed and never omitted. A check that cannot run in the current
     configuration is written with `applicable: false` and a reason, so the block
     always states what was and was not verified.
-    """
-    n_episodes = int(cfg.sanity.n_episodes)
-    n_targets = int(cfg.env.n_targets)
 
-    oracle = float(
-        np.mean(
-            success_rates_at(
-                cfg,
-                accuracy=1.0,
-                confidence=1.0,
-                quality_level=1.0,
-                n_episodes=n_episodes,
-                mapping=str(cfg.mapping.name),
+    The oracle ceiling is checked for **every** mapping in the grid, not just the
+    first. A mapping that slows down when the posterior is uncertain can fail the
+    ceiling while another passes it, and a single-mapping check would hide that
+    behind whichever mapping happened to be listed first.
+    """
+    n_targets = int(cfg.env.n_targets)
+    n_classes = int(cfg.data.n_classes)
+    oracle_threshold = float(cfg.sanity.oracle_threshold)
+
+    per_mapping: dict[str, float] = {}
+    for name in cfg.grid.mappings:
+        per_mapping[str(name)] = float(
+            np.mean(
+                success_rates_at(
+                    cfg,
+                    accuracy=1.0,
+                    confidence=1.0,
+                    quality_level=1.0,
+                    n_episodes=int(cfg.sanity.oracle_episodes),
+                    mapping=str(name),
+                )
             )
         )
-    )
+
+    # The floor is a property of the environment rather than of any one mapping,
+    # and argmax is the mapping most able to blunder into a target, so checking
+    # it there is the strictest reading.
     chance = float(
         np.mean(
             success_rates_at(
                 cfg,
-                accuracy=1.0 / int(cfg.data.n_classes),
-                confidence=1.0 / int(cfg.data.n_classes),
+                accuracy=1.0 / n_classes,
+                confidence=1.0 / n_classes,
                 quality_level=0.0,
-                n_episodes=n_episodes,
-                mapping=str(cfg.mapping.name),
+                n_episodes=int(cfg.sanity.chance_episodes),
+                mapping=str(cfg.grid.mappings[0]),
             )
         )
     )
 
+    worst = min(per_mapping, key=lambda key: per_mapping[key])
     checks: dict[str, Any] = {
         "oracle_success": {
-            "value": round(oracle, 6),
-            "threshold": float(cfg.sanity.oracle_threshold),
-            "pass": oracle >= float(cfg.sanity.oracle_threshold),
+            "by_mapping": {name: round(value, 6) for name, value in per_mapping.items()},
+            "worst_mapping": worst,
+            "value": round(per_mapping[worst], 6),
+            "threshold": oracle_threshold,
+            "pass": per_mapping[worst] >= oracle_threshold,
             "applicable": True,
         },
         "uniform_posterior_chance": {
@@ -617,11 +650,13 @@ def sanity_block(cfg: DictConfig) -> dict[str, Any]:
         },
         "alpha0_equals_s2": {
             "applicable": False,
-            "reason": "requires mappings s2_weighted and s4_shared, which land in T10 and T11",
+            "reason": "requires mapping s4_shared, which lands in T11",
             "pass": None,
         },
     }
     checks["all_passed"] = all(
-        entry["pass"] for entry in checks.values() if isinstance(entry, dict) and entry["applicable"]
+        entry["pass"]
+        for entry in checks.values()
+        if isinstance(entry, dict) and entry["applicable"]
     )
     return checks

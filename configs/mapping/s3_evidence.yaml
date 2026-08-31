@@ -1,0 +1,25 @@
+# S3: leaky log-evidence accumulation with a threshold and a hold.
+#
+# Accumulates once per decoder update, never per environment step. Sweeping
+# gamma and theta traces a latency/accuracy front, which is why mappings are
+# compared at matched latency rather than at matched update rate.
+
+name: s3_evidence
+
+params:
+  v_max: ${env.v_max}
+
+  # Leak. At 4 Hz, 0.8 gives the evidence a memory of roughly one second.
+  gamma: 0.8
+
+  # Threshold on the largest accumulated log-evidence. Log probabilities are
+  # negative, so this is negative too: a confident posterior of 0.9 contributes
+  # about -0.1 per update, an unsure one of 0.3 about -1.2.
+  theta: -1.0
+
+  # How long an emitted command persists. A burst carries about five usable
+  # windows, so 0.5 s lets several decisions land inside one burst.
+  hold_s: 0.5
+
+  # Guard for log(0).
+  epsilon: 1.0e-6

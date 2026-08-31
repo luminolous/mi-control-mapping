@@ -1,0 +1,10 @@
+# S2: posterior-weighted blend of the class directions, no confidence scaling.
+#
+# Opposing directions cancel, so an uncertain posterior gives a slower command.
+# Unlike S1 this can point straight at a diagonal target instead of zigzagging.
+
+name: s2_weighted
+
+params:
+  v_max: ${env.v_max}
+  entropy_scaling: false

@@ -1,7 +1,12 @@
 """Config name to mapping class.
 
 A plain dict, like the decoder registry. No dynamic import, no plugin discovery,
-no `eval`. Adding a mapping means one import and one entry.
+no `eval`.
+
+Keys are **config names**, not class names, so one class can back several
+configured variants. S2 with and without entropy scaling are different
+conditions in the experiment and need different values in the `mapping` column,
+but they are the same twenty lines of code.
 """
 
 from __future__ import annotations
@@ -13,9 +18,14 @@ from omegaconf import DictConfig, OmegaConf
 
 from micm.mapping.argmax import ArgmaxMapping
 from micm.mapping.base import Mapping
+from micm.mapping.evidence import EvidenceMapping
+from micm.mapping.weighted import WeightedMapping
 
 MAPPINGS: dict[str, type[Any]] = {
-    ArgmaxMapping.name: ArgmaxMapping,
+    "s1_argmax": ArgmaxMapping,
+    "s2_weighted": WeightedMapping,
+    "s2_weighted_entropy": WeightedMapping,
+    "s3_evidence": EvidenceMapping,
 }
 
 
@@ -25,7 +35,7 @@ def build_mapping(cfg: DictConfig, *, directions: np.ndarray) -> Mapping:
     The node carries `name` and a `params` block holding exactly the constructor
     keywords, so a misspelled key raises rather than sitting unused in the saved
     run config. `directions` is passed in rather than configured: it is permuted
-    per seed by the task, so it is a property of the episode, not of the mapping.
+    per seed by the task, so it belongs to the episode, not to the mapping.
 
     Raises:
         KeyError: on an unknown name or a missing `params` block.
@@ -45,3 +55,22 @@ def build_mapping(cfg: DictConfig, *, directions: np.ndarray) -> Mapping:
 
     mapping: Mapping = MAPPINGS[str(name)](directions=directions, **params)
     return mapping
+
+
+def select_mapping(cfg: DictConfig, name: str, *, directions: np.ndarray) -> Mapping:
+    """Build the mapping a cell names, from the `mappings` block of a run config.
+
+    The grid varies the mapping, so the runner cannot use a single composed
+    `mapping` group. Every mapping the experiment needs is composed into
+    `cfg.mappings` under its own key, and this picks the one for the cell.
+
+    Raises:
+        KeyError: if the experiment config did not compose that mapping.
+    """
+    if name not in cfg.mappings:
+        raise KeyError(
+            f"the experiment config does not compose mapping {name!r}; add it to the "
+            f"defaults list as `- /mapping@mappings.{name}: {name}`. "
+            f"Composed: {sorted(cfg.mappings)}"
+        )
+    return build_mapping(cfg.mappings[name], directions=directions)

@@ -1,0 +1,11 @@
+# S2 with confidence scaling: the blend is additionally multiplied by
+# 1 - H(p)/log K, so a flat posterior gives a near standstill.
+#
+# A separate config rather than an override, because it is a separate condition
+# in the experiment and needs its own value in the `mapping` column. Same class.
+
+name: s2_weighted_entropy
+
+params:
+  v_max: ${env.v_max}
+  entropy_scaling: true

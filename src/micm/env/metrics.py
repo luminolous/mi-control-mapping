@@ -98,10 +98,18 @@ def path_efficiency(outcomes: Sequence[TargetOutcome]) -> float:
     the ratio can exceed one, which would make the metric report a trajectory as
     better than optimal. Excluding those keeps the value in (0, 1].
 
+    `straight_line` is the distance to the target boundary rather than its
+    centre, because acquisition needs the robot inside the radius and not at the
+    middle. Measured to the centre, a robot that stopped just inside the edge
+    scores above 1.
+
+    A target already satisfied without travelling scores 1: there was no shorter
+    path available.
+
     Returns NaN when nothing was acquired.
     """
     ratios = [
-        outcome.straight_line / outcome.path_length
+        1.0 if outcome.straight_line == 0.0 else outcome.straight_line / outcome.path_length
         for outcome in outcomes
         if outcome.acquired and outcome.path_length > 0.0
     ]
