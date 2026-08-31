@@ -61,8 +61,10 @@ class EpisodeTrace:
     pos: list[np.ndarray] = field(default_factory=list)
     vel: list[np.ndarray] = field(default_factory=list)
     command: list[np.ndarray] = field(default_factory=list)
-    intent: list[np.ndarray] = field(default_factory=list)
+    decoded_intent: list[np.ndarray] = field(default_factory=list)
+    target_direction: list[np.ndarray] = field(default_factory=list)
     has_command: list[bool] = field(default_factory=list)
+    decoder_update: list[bool] = field(default_factory=list)
     target_idx: list[int] = field(default_factory=list)
     outcomes: list[TargetOutcome] = field(default_factory=list)
 
@@ -72,8 +74,12 @@ class EpisodeTrace:
             "pos": np.asarray(self.pos, dtype=np.float64).reshape(-1, 2),
             "vel": np.asarray(self.vel, dtype=np.float64).reshape(-1, 2),
             "command": np.asarray(self.command, dtype=np.float64).reshape(-1, 2),
-            "intent": np.asarray(self.intent, dtype=np.float64).reshape(-1, 2),
+            "decoded_intent": np.asarray(self.decoded_intent, dtype=np.float64).reshape(-1, 2),
+            "target_direction": np.asarray(self.target_direction, dtype=np.float64).reshape(
+                -1, 2
+            ),
             "has_command": np.asarray(self.has_command, dtype=bool),
+            "decoder_update": np.asarray(self.decoder_update, dtype=bool),
             "target_idx": np.asarray(self.target_idx, dtype=np.int32),
         }
 
@@ -250,8 +256,13 @@ class CenterOutTask:
         """Ground-truth intent for a burst starting now. See `intended_class`."""
         return intended_class(self._pos, self.active_target, self.directions)
 
-    def intent_direction(self) -> np.ndarray:
-        """Unit vector from the robot to the active target, for the UCI metric."""
+    def target_direction(self) -> np.ndarray:
+        """Unit vector from the robot to the active target.
+
+        The ground-truth intent, used to choose which trial the replay pool
+        draws. Not the quantity UCI correlates against: that is the decoded
+        intent, which under a poor decoder points somewhere else entirely.
+        """
         delta = self.active_target - self._pos
         norm = float(np.hypot(delta[0], delta[1]))
         unit: np.ndarray = delta / norm if norm > 0.0 else np.zeros(2, dtype=np.float64)
@@ -287,7 +298,13 @@ class CenterOutTask:
         self._inside_obstacle = inside
         return entered
 
-    def step(self, command: np.ndarray | None) -> StepOutcome:
+    def step(
+        self,
+        command: np.ndarray | None,
+        *,
+        decoded_intent: np.ndarray | None = None,
+        decoder_update: bool = False,
+    ) -> StepOutcome:
         """Advance one `dt`.
 
         Args:
@@ -295,6 +312,15 @@ class CenterOutTask:
                 and a zero vector are the same instruction to the robot but are
                 recorded differently, because the UCI metric excludes samples
                 with no command rather than treating them as a direction.
+            decoded_intent: (2,) direction the posterior points in, before the
+                mapping turned it into a command. This is what UCI correlates
+                the realised motion against; the direction to the target is
+                recorded separately and is not a substitute, since under high
+                autonomy the robot heads for the target whatever the user
+                intended, which is precisely what UCI has to expose.
+            decoder_update: whether a new posterior arrived on this step. UCI is
+                sampled at decoder update times, not at the 100 Hz env rate,
+                which would otherwise count each posterior about 25 times.
 
         Raises:
             RuntimeError: if called after the episode is done.
@@ -319,8 +345,14 @@ class CenterOutTask:
         self.trace.pos.append(self._pos.copy())
         self.trace.vel.append(self._vel.copy())
         self.trace.command.append(applied.copy())
-        self.trace.intent.append(self.intent_direction())
+        self.trace.decoded_intent.append(
+            np.zeros(2, dtype=np.float64)
+            if decoded_intent is None
+            else np.asarray(decoded_intent, dtype=np.float64)
+        )
+        self.trace.target_direction.append(self.target_direction())
         self.trace.has_command.append(has_command)
+        self.trace.decoder_update.append(bool(decoder_update))
         self.trace.target_idx.append(self.active_target_index)
 
         inside = bool(np.hypot(*(self._pos - self.active_target)) <= self.target_radius)
