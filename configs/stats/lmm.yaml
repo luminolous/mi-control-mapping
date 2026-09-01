@@ -1,0 +1,87 @@
+# @package _global_
+#
+# At the global package, like the experiment configs: Hydra otherwise nests a
+# config under configs/stats/ beneath a `stats` key, and every read here would
+# need that prefix.
+# Statistics for scripts/04_analyze.py. Loaded separately from the run config,
+# because the models are chosen after the episodes exist and re-fitting a run
+# under a different model must not require re-running it.
+
+name: lmm
+
+# Which episode column the models explain.
+#
+# `agents/05` §5 names `success_rate`, and it stays the default. It is also the
+# metric most likely to saturate: with a generous timeout every mapping can
+# eventually reach every target, and a response with no spread cannot carry a
+# slope (docs/decisions.md D42b). The fit therefore refuses a degenerate
+# response by name rather than reporting a coefficient computed from nothing,
+# and `response_candidates` below is measured on every run so the choice is made
+# from the data and recorded.
+response: success_rate
+
+# Reported for every run, whichever response is fitted, so a saturated primary
+# metric is visible in `summary.json` rather than discovered later.
+response_candidates:
+  - success_rate
+  - time_to_target_median
+  - effective_itr
+  - path_efficiency
+
+# Below this the response is treated as degenerate and the fit is refused. A
+# spread of exactly zero is the obvious case; this catches the run where one
+# episode in a thousand differs, which fits but means nothing.
+min_response_spread: 1.0e-6
+
+# Transform applied to a bounded response before fitting. `logit` for anything
+# on [0, 1], `log` for a positive unbounded metric, `identity` otherwise.
+#
+# The logit uses the half-count correction, p' = (p * n + 0.5) / (n + 1) with n
+# the number of targets, rather than a free epsilon. A free epsilon decides how
+# far the 0s and 1s sit from everything else, and for a metric that piles up at
+# both ends that is most of the effect being measured. The half-count
+# correction ties it to the number of trials the proportion came from, which is
+# a fact about the experiment rather than a knob. See docs/decisions.md D49.
+transform: logit
+
+h1:
+  # The direct test: does the kappa-to-performance relationship depend on the
+  # mapping? The interaction term is the hypothesis.
+  formula: "{response} ~ {predictor} * C({strategy})"
+  predictor: kappa_offline
+  strategy: mapping
+  group: subject
+
+h2:
+  # The dial here is the achieved posterior accuracy, not offline kappa: the
+  # quality sweep moves accuracy and leaves kappa_offline untouched, since kappa
+  # is a property of the cached decoder.
+  predictor: effective_acc
+  strategy: mapping
+  group: subject
+  # Every other mapping's offset is expressed against this one, so the trade
+  # ratio reads as "switching away from argmax is worth this much accuracy".
+  reference: s1_argmax
+  # Below this the accuracy slope is indistinguishable from zero and the ratio
+  # is a division by noise. Reported with `unstable: true` rather than dropped,
+  # because a slope that small is itself a finding.
+  min_slope: 1.0e-3
+
+h3:
+  autonomy: alpha
+  # Where the kappa slope stops being distinguishable from zero: above that
+  # autonomy level the decoder no longer moves the outcome.
+  predictor: kappa_offline
+  # The guard. An alpha that makes every decoder look equal also makes the user
+  # irrelevant, and this is the metric that says which one happened.
+  guard: user_contribution_index
+
+bootstrap:
+  # Resamples subjects, never episodes: episodes within a subject share a
+  # decoder, a posterior file and a subject's own aptitude, so resampling them
+  # would report an interval far narrower than the evidence supports.
+  n_boot: 1000
+  ci: 0.95
+  # Fewer than this and a between-subject interval is not defined. Nine
+  # subjects is already thin, which the write-up says rather than hiding.
+  min_subjects: 3

@@ -499,15 +499,17 @@ def run_episode(
             buffer.push(float(burst.t_rel[row]), burst.posterior[row])
 
         commanded = False
-        previous_id: int | None = None
+        # The array itself rather than its id, for the reason in
+        # micm/mapping/base.py: a freed object's address can be reused.
+        previous: np.ndarray | None = None
         for step in range(burst_steps + gap_steps):
             now = step * dt
             # No command before the first window has filled and the latency
             # buffer has released it, and none at all during the gap.
             available = buffer.latest(now) if now < burst_s else None
 
-            update = available is not None and id(available) != previous_id
-            previous_id = id(available) if available is not None else None
+            update = available is not None and available is not previous
+            previous = available
 
             command = mapping.step(available, task.state, dt)
             if available is None:

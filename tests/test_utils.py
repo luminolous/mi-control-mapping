@@ -138,9 +138,14 @@ def test_generator_for_distinguishes_types() -> None:
 
 
 def test_configure_logging_does_not_duplicate_handlers() -> None:
+    """The property is that a second call adds nothing, so the count is compared
+    against itself. An absolute count would also be counting pytest's own
+    capture handlers, which attach to `micm` because it does not propagate."""
     configure_logging(logging.DEBUG)
+    before = len(logging.getLogger("micm").handlers)
     configure_logging(logging.INFO)
-    assert len(logging.getLogger("micm").handlers) == 1
+    assert len(logging.getLogger("micm").handlers) == before
+    assert before >= 1
 
 
 def test_get_logger_nests_under_micm() -> None:

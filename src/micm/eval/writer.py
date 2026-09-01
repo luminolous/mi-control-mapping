@@ -26,6 +26,7 @@ import pandas as pd
 from omegaconf import DictConfig
 
 import micm
+from micm.eval.aggregate import scores_block
 from micm.eval.runner import EpisodeResult, resolve_variants, variant_for
 from micm.utils.config import save_config
 from micm.utils.hashing import config_hash
@@ -68,17 +69,6 @@ EPISODE_SCHEMA: Final[dict[str, str]] = {
     "episode_duration_s": "float32",
     "wall_time_s": "float32",
 }
-
-# Metrics summarised in the scores block, all of them bounded or non-negative.
-SCORE_COLUMNS: Final[tuple[str, ...]] = (
-    "success_rate",
-    "path_efficiency",
-    "time_to_target_median",
-    "direction_reversals",
-    "effective_itr",
-    "user_contribution_index",
-)
-
 
 @dataclass(frozen=True)
 class RunResult:
@@ -177,48 +167,6 @@ def validate_schema(frame: pd.DataFrame) -> None:
         )
 
 
-def _describe(values: pd.Series) -> dict[str, Any] | None:
-    """Mean, sd, and a normal-approximation 95% interval, or None if all NaN."""
-    clean = values.dropna()
-    if clean.empty:
-        return None
-    mean = float(clean.mean())
-    sd = float(clean.std(ddof=1)) if len(clean) > 1 else 0.0
-    half = 1.96 * sd / np.sqrt(len(clean)) if len(clean) > 1 else 0.0
-    return {
-        "mean": round(mean, 6),
-        "sd": round(sd, 6),
-        "ci95": [round(mean - half, 6), round(mean + half, 6)],
-        "n": len(clean),
-    }
-
-
-def _blocks(frame: pd.DataFrame, by: Sequence[str]) -> list[dict[str, Any]]:
-    entries: list[dict[str, Any]] = []
-    for key, group in frame.groupby(list(by), dropna=False, observed=True):
-        keys = key if isinstance(key, tuple) else (key,)
-        entry: dict[str, Any] = dict(zip(by, keys, strict=True))
-        entry["n_episodes"] = len(group)
-        for column in SCORE_COLUMNS:
-            entry[column] = _describe(group[column])
-        entries.append(entry)
-    return entries
-
-
-def scores_block(frame: pd.DataFrame) -> dict[str, Any]:
-    """Aggregated scores, always with the by-subject breakdown alongside.
-
-    Between-subject variance on IV-2a exceeds most effects of interest, so an
-    overall mean without the breakdown invites reading a subject effect as a
-    condition effect.
-    """
-    return {
-        "by_cell": _blocks(frame, ["mapping", "quality_level"]),
-        "by_subject": _blocks(frame, ["subject"]),
-        "overall": {column: _describe(frame[column]) for column in SCORE_COLUMNS},
-    }
-
-
 def meta_block(
     cfg: DictConfig, frame: pd.DataFrame, *, run_id: str, cfg_hash: str, wall_time_s: float
 ) -> dict[str, Any]:
@@ -234,6 +182,14 @@ def meta_block(
             "pandas": pd.__version__,
         },
         "host": {"platform": platform.platform()},
+        # What the score intervals were resampled from. It lives here rather
+        # than inside `scores`, which `agents/05` §3 fixes at three keys.
+        "aggregate": {
+            "n_boot": int(cfg.aggregate.n_boot),
+            "ci": float(cfg.aggregate.ci),
+            "min_subjects": int(cfg.aggregate.min_subjects),
+            "resampled": "subjects",
+        },
         "n_episodes": len(frame),
         "wall_time_s": round(wall_time_s, 6),
         "seed": int(cfg.seed),
@@ -260,7 +216,13 @@ def write_run(
 
     summary = {
         "meta": meta_block(cfg, frame, run_id=run_id, cfg_hash=cfg_hash, wall_time_s=wall_time_s),
-        "scores": scores_block(frame),
+        "scores": scores_block(
+            frame,
+            n_boot=int(cfg.aggregate.n_boot),
+            ci=float(cfg.aggregate.ci),
+            min_subjects=int(cfg.aggregate.min_subjects),
+            seed=int(cfg.seed),
+        ),
         "stats": stats
         if stats is not None
         else {"model": None, "note": "fitted by scripts/04_analyze.py, which lands in T13"},

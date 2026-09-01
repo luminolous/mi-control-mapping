@@ -117,6 +117,23 @@ def test_the_update_hook_fires_once_per_posterior_not_once_per_step() -> None:
     assert mapping.updates == 2
 
 
+def test_a_freed_posteriors_address_is_not_mistaken_for_the_same_posterior() -> None:
+    """The hazard behind storing an id instead of the object.
+
+    Each array here is dropped as soon as `step` returns, so CPython is free to
+    hand the next one the same address. A mapping that remembered only the id
+    would see one update out of two hundred and stall its accumulator, and the
+    trace would under-report `decoder_update` with nothing raising.
+    See docs/decisions.md D53.
+    """
+    mapping = CountingMapping(directions=DEFAULT_DIRECTIONS, v_max=V_MAX)
+    mapping.reset(np.random.default_rng(0))
+
+    for _ in range(200):
+        mapping.step(np.array([0.7, 0.1, 0.1, 0.1]), STATE, DT)
+    assert mapping.updates == 200
+
+
 def test_two_equal_posteriors_still_count_as_two_updates() -> None:
     """Detection is by identity, because consecutive posteriors can hold equal values."""
     mapping = CountingMapping(directions=DEFAULT_DIRECTIONS, v_max=V_MAX)

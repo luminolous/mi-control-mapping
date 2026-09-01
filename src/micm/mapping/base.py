@@ -96,11 +96,17 @@ class BaseMapping(ABC):
         self.directions = validate_directions(directions)
         self.n_classes = len(self.directions)
         self.v_max = float(v_max)
-        self._last_posterior_id: int | None = None
+        # The object, not its id. CPython reuses the address of a freed
+        # object, so a stored id can match a different array that happens to
+        # land in the same memory, which reads as "no update" and stalls an
+        # accumulator. Holding the reference also keeps the previous array
+        # alive, which is what guarantees the next one gets a different
+        # address. See docs/decisions.md D53.
+        self._last_posterior: np.ndarray | None = None
 
     def reset(self, rng: np.random.Generator) -> None:
         """Clear internal state at the start of an episode."""
-        self._last_posterior_id = None
+        self._last_posterior = None
         self.on_reset(rng)
 
     def step(
@@ -115,15 +121,14 @@ class BaseMapping(ABC):
         records the absence of a command separately from a zero command.
         """
         if posterior is None:
-            self._last_posterior_id = None
+            self._last_posterior = None
             return np.zeros(2, dtype=np.float64)
 
         row = validate_posterior(posterior, self.n_classes)
         # Identity, not equality: two consecutive posteriors may hold equal
         # values, and treating that as "no update" would stall an accumulator.
-        current_id = id(posterior)
-        if current_id != self._last_posterior_id:
-            self._last_posterior_id = current_id
+        if posterior is not self._last_posterior:
+            self._last_posterior = posterior
             self.on_new_posterior(row)
 
         return self.command(row, state, dt)
