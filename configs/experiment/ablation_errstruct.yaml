@@ -1,0 +1,35 @@
+# @package _global_
+#
+# Placed at the global package: a config under configs/experiment/ would
+# otherwise be nested under an `experiment` key by Hydra's directory-based
+# package inference, and every path in the runner would need that prefix.
+#
+# Two decoders with the same accuracy can fail differently, and the mappings
+# that integrate over time should care. Smoothing spreads the error evenly,
+# jitter moves it to the burst edges, and burst error concentrates it into runs
+# of consecutive wrong windows, which is what a real decoder does.
+#
+# `none` is absent: it is the main experiment, and repeating it here would make
+# the comparison look like four conditions when it is three against a baseline
+# that already exists.
+#
+# 3 error types x 4 mappings x 9 subjects x 5 seeds = 540 episodes.
+
+defaults:
+  - /matrix_defaults
+  - _self_
+
+name: ablation_errstruct
+
+grid:
+  subjects: [1, 2, 3, 4, 5, 6, 7, 8, 9]
+  decoders: [riemann]
+  mappings: [s1_argmax, s2_weighted, s3_evidence, s4_shared]
+  quality_levels: [0.0]
+  protocols: [burst]
+  windows_s: [2.0]
+  error_structures: [smoothing, jitter, burst]
+  intent_modes: [null]
+  alphas: [null]
+  latencies_ms: [250]
+  seeds: 5

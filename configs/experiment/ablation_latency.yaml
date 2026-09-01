@@ -1,0 +1,32 @@
+# @package _global_
+#
+# Placed at the global package: a config under configs/experiment/ would
+# otherwise be nested under an `experiment` key by Hydra's directory-based
+# package inference, and every path in the runner would need that prefix.
+#
+# How much of the mapping difference survives feedback delay? Latency is applied
+# in the runner rather than at cache time, so every latency reads the same
+# posterior file and no extra caching is needed.
+#
+# 4 latencies x 4 mappings x 9 subjects x 5 seeds = 720 episodes.
+
+defaults:
+  - /matrix_defaults
+  - _self_
+
+name: ablation_latency
+
+grid:
+  subjects: [1, 2, 3, 4, 5, 6, 7, 8, 9]
+  decoders: [riemann]
+  mappings: [s1_argmax, s2_weighted, s3_evidence, s4_shared]
+  quality_levels: [0.0]
+  protocols: [burst]
+  windows_s: [2.0]
+  error_structures: [none]
+  intent_modes: [null]
+  alphas: [null]
+  # 0 ms is not realisable online. It is the reference point the other three are
+  # read against, not a condition anyone could deploy.
+  latencies_ms: [0, 125, 250, 500]
+  seeds: 5

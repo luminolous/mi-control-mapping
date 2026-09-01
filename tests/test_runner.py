@@ -185,6 +185,7 @@ def test_the_grid_enumerates_the_product_of_its_axes(cfg: DictConfig) -> None:
         * len(cfg.grid.mappings)
         * len(cfg.grid.quality_levels)
         * len(cfg.grid.protocols)
+        * len(cfg.grid.windows_s)
         * len(cfg.grid.error_structures)
         * len(cfg.grid.intent_modes)
         * len(cfg.grid.alphas)
@@ -198,7 +199,11 @@ def test_the_grid_enumerates_the_product_of_its_axes(cfg: DictConfig) -> None:
 def test_a_missing_cache_names_the_file_it_wanted(cfg: DictConfig) -> None:
     """No silent recomputation: the caching script has simply not been run."""
     real = OmegaConf.merge(
-        cfg, {"synthetic": {"enabled": False}, "posterior_hash": "deadbeef"}
+        cfg,
+        {
+            "synthetic": {"enabled": False},
+            "replay_variants": {"burst_w2000": {"posterior_hash": "deadbeef"}},
+        },
     )
     assert isinstance(real, DictConfig)
     cell = enumerate_cells(real)[0]
@@ -209,7 +214,7 @@ def test_a_missing_cache_names_the_file_it_wanted(cfg: DictConfig) -> None:
 def test_a_real_run_without_a_posterior_hash_says_so(cfg: DictConfig) -> None:
     real = OmegaConf.merge(cfg, {"synthetic": {"enabled": False}})
     assert isinstance(real, DictConfig)
-    with pytest.raises(ValueError, match="posterior_hash is null"):
+    with pytest.raises(ValueError, match="has a null posterior_hash"):
         load_arrays(enumerate_cells(real)[0], real)
 
 
@@ -259,7 +264,9 @@ def test_a_run_writes_all_three_files_and_four_summary_blocks(cfg: DictConfig) -
 def test_no_partial_directory_survives_a_failed_write(cfg: DictConfig) -> None:
     """A crashed run must not leave something a later analysis reads as complete."""
     results = run_all(cfg)
-    broken = OmegaConf.merge(cfg, {"replay": {"window_s": "not-a-number"}})
+    broken = OmegaConf.merge(
+        cfg, {"replay_variants": {"burst_w2000": {"window_s": "not-a-number"}}}
+    )
     assert isinstance(broken, DictConfig)
 
     with pytest.raises(ValueError):
@@ -371,6 +378,7 @@ def test_a_cell_key_is_content_addressed() -> None:
         "mapping": "m",
         "quality_level": 0.5,
         "protocol": "burst",
+        "window_s": 2.0,
         "error_struct": "none",
         "intent_mode": "aware",
         "alpha": None,

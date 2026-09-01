@@ -1,0 +1,37 @@
+# @package _global_
+#
+# Placed at the global package: a config under configs/experiment/ would
+# otherwise be nested under an `experiment` key by Hydra's directory-based
+# package inference, and every path in the runner would need that prefix.
+#
+# H3: is there an autonomy level above which decoder quality stops mattering?
+# S4 only, because alpha is an S4 parameter and setting it on a grid that also
+# held argmax would name a parameter argmax does not have.
+#
+# UCI is the guard metric: an alpha that makes every decoder look equal also
+# makes the user irrelevant, and the sweep has to be able to show that.
+#
+# 1 mapping x 3 decoders x 9 subjects x 8 alphas x 10 seeds = 2160 episodes.
+
+defaults:
+  - /matrix_defaults
+  - _self_
+
+name: alpha_sweep
+
+grid:
+  subjects: [1, 2, 3, 4, 5, 6, 7, 8, 9]
+  decoders: [fbcsp, riemann, eegnet]
+  mappings: [s4_shared]
+  quality_levels: [0.0]
+  protocols: [burst]
+  windows_s: [2.0]
+  error_structures: [none]
+  intent_modes: [aware]
+  # Eight points evenly spaced on [0, 1], step 1/7. Uniform rather than dense
+  # anywhere in particular: alpha* is what the experiment is looking for, and
+  # spacing the grid around a guess would help decide the answer. Reported as a
+  # grid estimate, never as a solved threshold.
+  alphas: [0.0, 0.143, 0.286, 0.429, 0.571, 0.714, 0.857, 1.0]
+  latencies_ms: [250]
+  seeds: 10

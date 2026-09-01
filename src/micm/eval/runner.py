@@ -14,11 +14,14 @@ timeout in `configs/env/centerout.yaml`.
 
 from __future__ import annotations
 
+import os
 import time
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
+from concurrent.futures import Future, ProcessPoolExecutor, as_completed
 from dataclasses import dataclass, field
+from itertools import product
 from pathlib import Path
-from typing import Any
+from typing import Any, Final
 
 import numpy as np
 from omegaconf import DictConfig, OmegaConf
@@ -43,6 +46,28 @@ from micm.utils.logging import get_logger
 from micm.utils.seeding import generator_for
 
 logger = get_logger(__name__)
+
+# Blocks per worker. More than one so a worker that draws a run of cheap
+# episodes can come back for more, fewer than many so the fixed cost of loading
+# a posterior file is not paid repeatedly.
+_BLOCKS_PER_WORKER: Final[int] = 4
+
+
+def _worker_count(cfg: DictConfig) -> int:
+    """How many processes to use, never more than the machine has cores.
+
+    `n_workers` is excluded from the config hash because it cannot change a
+    number, which is only true because episode seeds are derived from cell
+    content. Clamping here rather than raising: a config written on an
+    eight-core machine should still run on a four-core one.
+    """
+    requested = int(cfg.n_workers)
+    if requested < 1:
+        raise ValueError(f"n_workers must be at least 1, got {requested}")
+    available = os.cpu_count() or 1
+    if requested > available:
+        logger.info("n_workers %d exceeds %d cores, using %d", requested, available, available)
+    return min(requested, available)
 
 
 @dataclass(frozen=True)
@@ -218,6 +243,87 @@ def apply_error_structure(
 
 
 @dataclass(frozen=True)
+class ReplayVariant:
+    """One replay condition: a protocol, a window, and the cache holding it.
+
+    Two ablations vary the protocol and the window length, and both of those
+    change the posteriors themselves rather than anything the runner computes.
+    A variant therefore names the cache file its condition lives in, and the
+    runner reads nothing about replay from `cfg.replay`, which can only describe
+    one condition.
+    """
+
+    key: str
+    protocol: str
+    window_s: float
+    stride_s: float
+    gap_s: float
+    posterior_hash: str | None
+
+
+def variant_key(protocol: str, window_s: float) -> str:
+    """The name a replay variant must be filed under.
+
+    Derived rather than free text, so a variant cannot be reached by a grid
+    combination it does not describe.
+    """
+    return f"{protocol}_w{round(float(window_s) * 1000)}"
+
+
+def resolve_variants(cfg: DictConfig) -> dict[str, ReplayVariant]:
+    """Read `cfg.replay_variants`, checking each entry is filed under its own key.
+
+    Raises:
+        KeyError: if the config has no `replay_variants` block.
+        ValueError: if an entry sits under a key that does not match its own
+            protocol and window, which would let a grid combination silently
+            load the posteriors of a different condition.
+    """
+    if "replay_variants" not in cfg:
+        raise KeyError(
+            "the experiment config has no `replay_variants` block; the runner reads the "
+            "protocol and window from there rather than from `replay`, because the "
+            "ablations vary both"
+        )
+
+    variants: dict[str, ReplayVariant] = {}
+    for name, node in cfg.replay_variants.items():
+        expected = variant_key(str(node.protocol), float(node.window_s))
+        if str(name) != expected:
+            raise ValueError(
+                f"replay variant {name!r} describes protocol {node.protocol!r} at "
+                f"{float(node.window_s)}s, which belongs under {expected!r}"
+            )
+        variants[str(name)] = ReplayVariant(
+            key=str(name),
+            protocol=str(node.protocol),
+            window_s=float(node.window_s),
+            stride_s=float(node.stride_s),
+            gap_s=float(node.gap_s),
+            posterior_hash=None if node.posterior_hash is None else str(node.posterior_hash),
+        )
+    return variants
+
+
+def variant_for(cell: Cell, variants: dict[str, ReplayVariant]) -> ReplayVariant:
+    """The replay condition a cell names.
+
+    Raises:
+        KeyError: if the grid reaches a protocol and window the config does not
+            describe. The alternative, falling back on some other variant, would
+            run a condition the episode row does not name.
+    """
+    key = variant_key(cell.protocol, cell.window_s)
+    if key not in variants:
+        raise KeyError(
+            f"the grid asks for {key!r} but the config composes only "
+            f"{sorted(variants)}; add it as "
+            f"`- /replay@replay_variants.{key}: {cell.protocol}`"
+        )
+    return variants[key]
+
+
+@dataclass(frozen=True)
 class Cell:
     """One combination of independent variables, plus its seed."""
 
@@ -226,7 +332,13 @@ class Cell:
     decoder: str
     mapping: str
     quality_level: float
+    # The protocol and the window length select which cached posterior file the
+    # episode reads. They are cell properties rather than config properties
+    # because two ablations vary them; reading them from `cfg.replay` would make
+    # every row of those ablations read the same cache while the column claimed
+    # otherwise. See docs/decisions.md D45.
     protocol: str
+    window_s: float
     error_struct: str
     # None for a mapping that has no such parameter, which the episode row
     # records as NaN or as a null string. Setting either on a grid that also
@@ -245,6 +357,7 @@ class Cell:
             self.mapping,
             self.quality_level,
             self.protocol,
+            self.window_s,
             self.error_struct,
             self.intent_mode,
             self.alpha,
@@ -353,7 +466,7 @@ def run_episode(
 
     dt = float(env.dt)
     burst_s = float(cfg.data.epoch.tmax) - float(cfg.data.epoch.tmin)
-    gap_s = float(cfg.replay.gap_s)
+    gap_s = variant_for(cell, resolve_variants(cfg)).gap_s
     burst_steps = round(burst_s / dt)
     gap_steps = round(gap_s / dt)
     latency_s = cell.latency_ms / 1000.0
@@ -433,39 +546,67 @@ def run_episode(
     )
 
 
+# Grid key to the Cell field it fills, in the order the product is taken. The
+# order is the file order of `episodes.parquet` and therefore fixed: changing it
+# changes nothing about any result but makes two runs of the same config produce
+# byte-different Parquet files.
+_GRID_AXES: Final[tuple[tuple[str, str], ...]] = (
+    ("subjects", "subject"),
+    ("decoders", "decoder"),
+    ("mappings", "mapping"),
+    ("quality_levels", "quality_level"),
+    ("protocols", "protocol"),
+    ("windows_s", "window_s"),
+    ("error_structures", "error_struct"),
+    ("intent_modes", "intent_mode"),
+    ("alphas", "alpha"),
+    ("latencies_ms", "latency_ms"),
+)
+
 def enumerate_cells(cfg: DictConfig) -> list[Cell]:
-    """Every cell of the configured grid, in a deterministic order."""
+    """Every cell of the configured grid, in a deterministic order.
+
+    Every combination the grid names must be reachable, so this also resolves
+    the replay variant of each cell and raises if the config does not describe
+    it. Finding that out here rather than on the first episode means a
+    mis-specified twelve-hour matrix fails in the first second.
+
+    Raises:
+        KeyError: on a grid axis missing from the config, or a protocol and
+            window combination with no replay variant.
+    """
     grid = cfg.grid
+    for name, _ in _GRID_AXES:
+        if name not in grid:
+            raise KeyError(f"the grid has no {name!r} axis; every axis must be stated explicitly")
+
+    values = [list(grid[name]) for name, _ in _GRID_AXES]
+    fields = [field_name for _, field_name in _GRID_AXES]
+    variants = resolve_variants(cfg)
+
     cells: list[Cell] = []
-    for subject in grid.subjects:
-        for decoder in grid.decoders:
-            for mapping in grid.mappings:
-                for level in grid.quality_levels:
-                    for protocol in grid.protocols:
-                        for error_struct in grid.error_structures:
-                            for intent_mode in grid.intent_modes:
-                                for alpha in grid.alphas:
-                                    for latency in grid.latencies_ms:
-                                        for seed in range(int(grid.seeds)):
-                                            cells.append(
-                                                Cell(
-                                                    experiment=str(cfg.name),
-                                                    subject=int(subject),
-                                                    decoder=str(decoder),
-                                                    mapping=str(mapping),
-                                                    quality_level=float(level),
-                                                    protocol=str(protocol),
-                                                    error_struct=str(error_struct),
-                                                    intent_mode=None
-                                                    if intent_mode is None
-                                                    else str(intent_mode),
-                                                    alpha=None
-                                                    if alpha is None
-                                                    else float(alpha),
-                                                    latency_ms=int(latency),
-                                                    seed=int(seed),
-                                                )
-                                            )
+    for combination in product(*values, range(int(grid.seeds))):
+        # Read by name rather than unpacked positionally, so reordering the axes
+        # cannot silently swap two columns of the same type.
+        axis = dict(zip(fields, combination[:-1], strict=True))
+        cell = Cell(
+            experiment=str(cfg.name),
+            subject=int(axis["subject"]),
+            decoder=str(axis["decoder"]),
+            mapping=str(axis["mapping"]),
+            quality_level=float(axis["quality_level"]),
+            protocol=str(axis["protocol"]),
+            window_s=float(axis["window_s"]),
+            error_struct=str(axis["error_struct"]),
+            intent_mode=None if axis["intent_mode"] is None else str(axis["intent_mode"]),
+            alpha=None if axis["alpha"] is None else float(axis["alpha"]),
+            latency_ms=int(axis["latency_ms"]),
+            seed=int(combination[-1]),
+        )
+        # Raises here rather than on the first episode, so a mis-specified
+        # twelve-hour matrix fails in its first second.
+        variant_for(cell, variants)
+        cells.append(cell)
     return cells
 
 
@@ -477,24 +618,27 @@ def load_arrays(cell: Cell, cfg: DictConfig) -> tuple[dict[str, np.ndarray], flo
             silent recomputation: a missing cache means the caching script has
             not been run for this configuration.
     """
+    variant = variant_for(cell, resolve_variants(cfg))
+
     if bool(cfg.synthetic.enabled):
-        rng = generator_for(int(cfg.seed), "synthetic", cell.subject, cell.decoder)
+        rng = generator_for(int(cfg.seed), "synthetic", cell.subject, cell.decoder, variant.key)
         arrays = synthetic_arrays(
             rng,
             n_bursts=int(cfg.synthetic.n_bursts),
             n_windows=int(cfg.synthetic.n_windows),
             n_classes=int(cfg.data.n_classes),
             accuracy=float(cfg.synthetic.accuracy),
-            window_s=float(cfg.replay.window_s),
-            stride_s=float(cfg.replay.stride_s),
+            window_s=variant.window_s,
+            stride_s=variant.stride_s,
             confidence=float(cfg.synthetic.confidence),
         )
         return arrays, float("nan")
 
-    if cfg.posterior_hash is None:
+    if variant.posterior_hash is None:
         raise ValueError(
-            "synthetic.enabled is false but posterior_hash is null; name the config hash "
-            "of the cache to read, which scripts/02_cache_posteriors.py prints when it writes"
+            f"synthetic.enabled is false but replay variant {variant.key!r} has a null "
+            "posterior_hash; name the config hash of the cache to read, which "
+            "scripts/02_cache_posteriors.py prints when it writes"
         )
 
     path = posterior_path(
@@ -502,9 +646,9 @@ def load_arrays(cell: Cell, cfg: DictConfig) -> tuple[dict[str, np.ndarray], flo
         subject=cell.subject,
         session=str(cfg.session),
         decoder=cell.decoder,
-        window_ms=round(float(cfg.replay.window_s) * 1000),
-        stride_ms=round(float(cfg.replay.stride_s) * 1000),
-        cfg_hash=str(cfg.posterior_hash),
+        window_ms=round(variant.window_s * 1000),
+        stride_ms=round(variant.stride_s * 1000),
+        cfg_hash=variant.posterior_hash,
     )
     if not path.is_file():
         raise FileNotFoundError(
@@ -523,21 +667,49 @@ def load_arrays(cell: Cell, cfg: DictConfig) -> tuple[dict[str, np.ndarray], flo
     )
 
 
+def cache_key(cell: Cell) -> tuple[Any, ...]:
+    """Which posterior file a cell reads.
+
+    Cells sharing this key share one loaded array set, which is the whole point
+    of caching posteriors: every mapping, quality level and seed of one subject
+    replays the same decoded windows.
+    """
+    return (cell.subject, cell.decoder, variant_key(cell.protocol, cell.window_s))
+
+
+def run_cells(cfg: DictConfig, cells: Sequence[Cell]) -> list[EpisodeResult]:
+    """Run a block of cells in this process, loading each posterior file once.
+
+    The unit of work a worker receives. Cells are expected to be grouped by
+    `cache_key`, but correctness does not depend on it: an ungrouped block only
+    reloads more often.
+    """
+    cache: dict[tuple[Any, ...], tuple[dict[str, np.ndarray], float]] = {}
+    results: list[EpisodeResult] = []
+    for cell in cells:
+        key = cache_key(cell)
+        if key not in cache:
+            cache[key] = load_arrays(cell, cfg)
+        arrays, kappa = cache[key]
+        results.append(run_episode(cell, arrays, cfg, kappa_offline=kappa))
+    return results
+
+
 def iter_results(cfg: DictConfig) -> Iterator[EpisodeResult]:
-    """Run every cell, yielding one result each.
+    """Run every cell in this process, yielding one result each, in grid order.
 
     Fails fast: an exception in one episode aborts the run. A partially completed
     matrix silently missing cells is worse than no results at all.
     """
     cells = enumerate_cells(cfg)
-    logger.info("%s: %d episodes", cfg.name, len(cells))
+    logger.info("%s: %d episodes, serial", cfg.name, len(cells))
 
-    cache: dict[tuple[int, str], tuple[dict[str, np.ndarray], float]] = {}
+    cache: dict[tuple[Any, ...], tuple[dict[str, np.ndarray], float]] = {}
     every = int(cfg.progress_every)
     started = time.perf_counter()
 
     for index, cell in enumerate(cells, start=1):
-        key = (cell.subject, cell.decoder)
+        key = cache_key(cell)
         if key not in cache:
             cache[key] = load_arrays(cell, cfg)
         arrays, kappa = cache[key]
@@ -545,20 +717,110 @@ def iter_results(cfg: DictConfig) -> Iterator[EpisodeResult]:
         yield run_episode(cell, arrays, cfg, kappa_offline=kappa)
 
         if every and index % every == 0:
-            elapsed = time.perf_counter() - started
-            remaining = elapsed / index * (len(cells) - index)
-            logger.info(
-                "%d/%d episodes, %.1fs elapsed, about %.0fs remaining",
-                index,
-                len(cells),
-                elapsed,
-                remaining,
-            )
+            _log_progress(index, len(cells), started)
+
+
+def _log_progress(done: int, total: int, started: float) -> None:
+    elapsed = time.perf_counter() - started
+    remaining = elapsed / done * (total - done)
+    logger.info(
+        "%d/%d episodes, %.1fs elapsed, about %.0fs remaining", done, total, elapsed, remaining
+    )
+
+
+def plan_chunks(cells: Sequence[Cell], n_workers: int) -> list[list[Cell]]:
+    """Split cells into worker-sized blocks that share a posterior file.
+
+    Grouped by `cache_key` first, so a worker loads one file rather than one per
+    episode. Split further into several blocks per worker, because episode cost
+    varies by an order of magnitude between a decoder that acquires targets and
+    one that times out on every one of them, and one block per worker would
+    leave seven workers idle behind the slowest.
+    """
+    if n_workers < 1:
+        raise ValueError(f"n_workers must be at least 1, got {n_workers}")
+
+    groups: dict[tuple[Any, ...], list[Cell]] = {}
+    for cell in cells:
+        groups.setdefault(cache_key(cell), []).append(cell)
+
+    target_blocks = max(n_workers * _BLOCKS_PER_WORKER, 1)
+    size = max(1, len(cells) // target_blocks)
+
+    chunks: list[list[Cell]] = []
+    for group in groups.values():
+        for start in range(0, len(group), size):
+            chunks.append(group[start : start + size])
+    return chunks
 
 
 def run_all(cfg: DictConfig) -> list[EpisodeResult]:
-    """Every episode of the configured experiment."""
-    return list(iter_results(cfg))
+    """Every episode of the configured experiment, in grid order.
+
+    Parallel across processes when `n_workers` is above one. The result is
+    identical either way: an episode's random stream is derived from the content
+    of its cell, not from its position in the queue or the worker that drew it,
+    so `n_workers` cannot change a number. There is a test that asserts it.
+    """
+    n_workers = _worker_count(cfg)
+    if n_workers <= 1:
+        return list(iter_results(cfg))
+
+    cells = enumerate_cells(cfg)
+    chunks = plan_chunks(cells, n_workers)
+    # No point starting a process that would have nothing to do; on Windows each
+    # one re-imports the package before it can run a single episode.
+    n_workers = min(n_workers, len(chunks))
+    logger.info(
+        "%s: %d episodes, %d workers, %d blocks", cfg.name, len(cells), n_workers, len(chunks)
+    )
+
+    every = int(cfg.progress_every)
+    started = time.perf_counter()
+    collected: list[EpisodeResult] = []
+    logged = 0
+
+    executor = ProcessPoolExecutor(max_workers=n_workers)
+    futures: list[Future[list[EpisodeResult]]] = [
+        executor.submit(run_cells, cfg, chunk) for chunk in chunks
+    ]
+    try:
+        for future in as_completed(futures):
+            # `.result()` re-raises whatever the worker raised. Nothing catches
+            # it: a matrix missing cells is worse than no matrix.
+            collected.extend(future.result())
+            if every and len(collected) - logged >= every:
+                logged = len(collected)
+                _log_progress(logged, len(cells), started)
+    except BaseException:
+        # Do not wait for the survivors once a worker has failed; the answer is
+        # not going to improve. On the way out of a successful run the pool is
+        # joined instead, so no process is left for the interpreter to reap.
+        executor.shutdown(wait=False, cancel_futures=True)
+        raise
+    executor.shutdown(wait=True)
+
+    # Sorted back into grid order rather than completion order, so two runs of
+    # the same config produce identical Parquet contents. Chunk order is not
+    # grid order: chunks are grouped by posterior file, and the protocol and
+    # window axes vary inside the subject loop.
+    position = {cell: index for index, cell in enumerate(cells)}
+    collected.sort(key=lambda result: position[result.cell])
+    return collected
+
+
+def sanity_variant(cfg: DictConfig) -> ReplayVariant:
+    """The replay condition the sanity checks run under: the grid's first.
+
+    The checks verify the environment and the arbitration, neither of which is a
+    property of the protocol, so one condition settles them. The first rather
+    than an arbitrary one so the choice is stated by the config.
+    """
+    variants = resolve_variants(cfg)
+    key = variant_key(str(cfg.grid.protocols[0]), float(cfg.grid.windows_s[0]))
+    if key not in variants:
+        raise KeyError(f"the grid's first replay condition {key!r} has no variant in the config")
+    return variants[key]
 
 
 def success_rates_at(
@@ -575,6 +837,7 @@ def success_rates_at(
     Used by the sanity checks, which need a controlled decoder rather than
     whatever the cache happens to hold.
     """
+    variant = sanity_variant(cfg)
     rates: list[float] = []
     for seed in range(n_episodes):
         cell = Cell(
@@ -583,7 +846,8 @@ def success_rates_at(
             decoder="synthetic",
             mapping=mapping,
             quality_level=quality_level,
-            protocol=str(cfg.replay.protocol),
+            protocol=variant.protocol,
+            window_s=variant.window_s,
             error_struct=ERROR_NONE,
             intent_mode=None,
             alpha=None,
@@ -597,8 +861,8 @@ def success_rates_at(
             n_windows=int(cfg.synthetic.n_windows),
             n_classes=int(cfg.data.n_classes),
             accuracy=accuracy,
-            window_s=float(cfg.replay.window_s),
-            stride_s=float(cfg.replay.stride_s),
+            window_s=variant.window_s,
+            stride_s=variant.stride_s,
             confidence=confidence,
         )
         rates.append(run_episode(cell, arrays, cfg).metrics.success_rate)
@@ -637,13 +901,15 @@ def _sanity_episode(
     Every call shares one random stream, so the only difference between two
     episodes is the mapping under test.
     """
+    variant = sanity_variant(cfg)
     cell = Cell(
         experiment="sanity_arbitration",
         subject=int(cfg.grid.subjects[0]),
         decoder="synthetic",
         mapping=mapping,
         quality_level=0.0,
-        protocol=str(cfg.replay.protocol),
+        protocol=variant.protocol,
+        window_s=variant.window_s,
         error_struct=ERROR_NONE,
         intent_mode=intent_mode,
         alpha=alpha,
@@ -654,14 +920,15 @@ def _sanity_episode(
 
 
 def _sanity_arrays(cfg: DictConfig, accuracy: float, tag: str) -> dict[str, np.ndarray]:
+    variant = sanity_variant(cfg)
     return synthetic_arrays(
         generator_for(int(cfg.seed), "sanity", tag, accuracy),
         n_bursts=int(cfg.synthetic.n_bursts),
         n_windows=int(cfg.synthetic.n_windows),
         n_classes=int(cfg.data.n_classes),
         accuracy=accuracy,
-        window_s=float(cfg.replay.window_s),
-        stride_s=float(cfg.replay.stride_s),
+        window_s=variant.window_s,
+        stride_s=variant.stride_s,
         confidence=float(cfg.synthetic.confidence),
     )
 

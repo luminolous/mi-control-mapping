@@ -26,7 +26,7 @@ import pandas as pd
 from omegaconf import DictConfig
 
 import micm
-from micm.eval.runner import EpisodeResult
+from micm.eval.runner import EpisodeResult, resolve_variants, variant_for
 from micm.utils.config import save_config
 from micm.utils.hashing import config_hash
 from micm.utils.logging import get_logger
@@ -110,9 +110,15 @@ def episodes_frame(
     Raises:
         ValueError: if the frame does not match `EPISODE_SCHEMA` exactly.
     """
+    variants = resolve_variants(cfg)
     rows = []
     for result in results:
         cell, metrics = result.cell, result.metrics
+        # From the cell's own replay variant, not from `cfg.replay`, which can
+        # only describe one condition while two ablations vary it. Reading it
+        # from the config would leave every row of those ablations claiming the
+        # window the config happened to compose. See docs/decisions.md D45.
+        variant = variant_for(cell, variants)
         rows.append(
             {
                 "experiment": cell.experiment,
@@ -123,8 +129,8 @@ def episodes_frame(
                 "quality_level": cell.quality_level,
                 "lam": result.lam,
                 "alpha": np.nan if cell.alpha is None else cell.alpha,
-                "window_s": float(cfg.replay.window_s),
-                "stride_s": float(cfg.replay.stride_s),
+                "window_s": variant.window_s,
+                "stride_s": variant.stride_s,
                 "latency_ms": cell.latency_ms,
                 "protocol": cell.protocol,
                 "error_struct": cell.error_struct,

@@ -11,7 +11,7 @@ help:
 	@echo "run        execute an experiment matrix (make run EXP=lambda_sweep)"
 	@echo "figures    render the paper figures from a run directory"
 	@echo "test       pytest"
-	@echo "smoke      synthetic posteriors, 1 subject, 2 episodes, seconds"
+	@echo "smoke      synthetic posteriors, 1 subject, 4 mappings, 4 episodes, seconds"
 	@echo "lint       ruff check + mypy"
 	@echo "clean      remove caches and build leftovers"
 

@@ -16,7 +16,11 @@
 defaults:
   - /base
   - /data: bci2a
-  - /replay: burst
+  # Replay conditions, each under the key derived from its own protocol and
+  # window. The runner reads these rather than a single composed `replay` group,
+  # because two ablations vary the protocol and the window and a group can hold
+  # only one of them.
+  - /replay@replay_variants.burst_w2000: burst
   - /quality: gap_fraction
   - /env: centerout
   # Every mapping the grid may name, each under its own key, because the grid
@@ -30,6 +34,12 @@ defaults:
 
 name: smoke
 
+# Serial. The smoke is a correctness check on four episodes, and on Windows a
+# worker process re-imports the package before it runs anything, which would
+# cost more than the run. The parallel path is covered by a test that asserts
+# it produces the same episodes as the serial one.
+n_workers: 1
+
 # No dataset, no cache files. Posteriors are generated in process.
 synthetic:
   enabled: true
@@ -38,11 +48,16 @@ synthetic:
   accuracy: 0.75
   confidence: 0.7
 
-# Read only when `synthetic.enabled` is false. Null rather than `???`, because
-# a mandatory-missing value breaks config hashing, and the hash has to work for
-# a synthetic run too.
+# Read only when `synthetic.enabled` is false.
 session: E
-posterior_hash: null
+
+# Which cache each replay condition reads. Null rather than `???`, because a
+# mandatory-missing value breaks config hashing and the hash has to work for a
+# synthetic run too; a null reached with synthetic posteriors off raises and
+# names the variant.
+replay_variants:
+  burst_w2000:
+    posterior_hash: null
 
 grid:
   subjects: [1]
@@ -50,6 +65,10 @@ grid:
   mappings: [s1_argmax, s2_weighted, s3_evidence, s4_shared]
   quality_levels: [1.0]
   protocols: [burst]
+  # Window length in seconds. With the protocol this selects the replay variant
+  # and therefore the cache file, so it is a grid axis rather than a config
+  # constant. See docs/decisions.md D45.
+  windows_s: [2.0]
   error_structures: [none]
   intent_modes: [null]
   # Null rather than NaN: a NaN in the config would break the config hash,

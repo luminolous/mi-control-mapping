@@ -1,0 +1,67 @@
+# What every real experiment shares, so that eight grid files differ only in
+# their grid.
+#
+# Not used by `experiment/smoke.yaml`, which runs a cut-down environment and
+# synthetic posteriors and would have to override most of this. The smoke run is
+# a check that the code executes, not a small version of an experiment.
+
+defaults:
+  - base
+  - data: bci2a
+  - quality: gap_fraction
+  - env: centerout
+  # Replay conditions, each filed under the key derived from its own protocol
+  # and window. The runner reads these rather than one composed `replay` group,
+  # because the protocol and the window change the posteriors themselves and two
+  # ablations vary them. An experiment that varies either composes the extra
+  # variants in its own defaults list. See docs/decisions.md D45.
+  - replay@replay_variants.burst_w2000: burst
+  # Every mapping any grid may name, each under its own key, because the grid
+  # varies the mapping and a single composed group could only hold one.
+  - mapping@mappings.s1_argmax: s1_argmax
+  - mapping@mappings.s2_weighted: s2_weighted
+  - mapping@mappings.s2_weighted_entropy: s2_weighted_entropy
+  - mapping@mappings.s3_evidence: s3_evidence
+  - mapping@mappings.s4_shared: s4_shared
+  - _self_
+
+# Session E throughout. Session T posteriors are in-sample: the decoder was
+# fitted on those very windows, so no closed-loop number computed from them
+# means anything. See docs/decisions.md D1.
+session: E
+
+# Real runs read cached posteriors. The synthetic block is still read, because
+# the sanity checks need a decoder of known accuracy rather than whatever the
+# cache happens to hold, and they run on every experiment.
+synthetic:
+  enabled: false
+  n_bursts: 24
+  n_windows: 7
+  accuracy: 0.75
+  confidence: 0.7
+
+# Which cache each replay condition reads, written here once the caching script
+# has printed its config hash. Null until then: reaching a null with
+# `synthetic.enabled` false raises and names the variant, rather than silently
+# reading some other file.
+replay_variants:
+  burst_w2000:
+    posterior_hash: null
+
+# Parameters of the structured-error variants, read when a grid names one.
+error_structure:
+  smoothing_eps: 0.3
+  jitter_windows: 2
+  burst_p_flip: 0.2
+  burst_mean_len: 3.0
+
+sanity:
+  # The oracle posterior is one-hot, so one episode settles it per mapping.
+  oracle_episodes: 1
+  # The chance floor is a rate, and a single episode can only report multiples
+  # of 1/n_targets. Several give it enough resolution to sit meaningfully below
+  # the threshold. This is the slowest check by a wide margin, because a chance
+  # decoder acquires nothing and every target burns the full timeout.
+  chance_episodes: 3
+  oracle_threshold: 0.95
+  chance_threshold: 0.3

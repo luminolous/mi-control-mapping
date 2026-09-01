@@ -1,0 +1,37 @@
+# @package _global_
+#
+# Placed at the global package: a config under configs/experiment/ would
+# otherwise be nested under an `experiment` key by Hydra's directory-based
+# package inference, and every path in the runner would need that prefix.
+#
+# The honesty check on S4. Intent-aware picks its attractive target from the
+# decoded intent, so it reads the decoder twice and part of any advantage it
+# shows is the decoder informing the autonomy term. Intent-blind attracts toward
+# the active task target regardless of the posterior. If S4's advantage over S2
+# disappears here, the advantage was leakage rather than arbitration.
+#
+# Three alphas rather than the full sweep: this asks whether a gap between the
+# variants exists, not where it peaks.
+#
+# 2 intent modes x 3 alphas x 9 subjects x 10 seeds = 540 episodes.
+
+defaults:
+  - /matrix_defaults
+  - _self_
+
+name: ablation_intent_blind
+
+grid:
+  subjects: [1, 2, 3, 4, 5, 6, 7, 8, 9]
+  decoders: [riemann]
+  mappings: [s4_shared]
+  quality_levels: [0.0]
+  protocols: [burst]
+  windows_s: [2.0]
+  error_structures: [none]
+  intent_modes: [aware, blind]
+  # Away from both endpoints on purpose: at alpha 0 the two variants are the
+  # same mapping, and at alpha 1 intent-blind ignores the user entirely.
+  alphas: [0.3, 0.5, 0.7]
+  latencies_ms: [250]
+  seeds: 10

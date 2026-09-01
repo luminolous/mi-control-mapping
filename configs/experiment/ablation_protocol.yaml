@@ -1,0 +1,38 @@
+# @package _global_
+#
+# Placed at the global package: a config under configs/experiment/ would
+# otherwise be nested under an `experiment` key by Hydra's directory-based
+# package inference, and every path in the runner would need that prefix.
+#
+# Burst replay is faithful to cue-based data: the user intends something for
+# 3.5 s and then rests. Stitched replay removes the rest, which is what a
+# self-paced system would look like and is also the condition that flatters
+# every mapping by giving it far more command time per unit of wall clock.
+#
+# The two protocols produce different posteriors and therefore different caches.
+#
+# 2 protocols x 4 mappings x 9 subjects x 5 seeds = 360 episodes.
+
+defaults:
+  - /matrix_defaults
+  - /replay@replay_variants.stitched_w2000: stitched
+  - _self_
+
+name: ablation_protocol
+
+replay_variants:
+  stitched_w2000:
+    posterior_hash: null
+
+grid:
+  subjects: [1, 2, 3, 4, 5, 6, 7, 8, 9]
+  decoders: [riemann]
+  mappings: [s1_argmax, s2_weighted, s3_evidence, s4_shared]
+  quality_levels: [0.0]
+  protocols: [burst, stitched]
+  windows_s: [2.0]
+  error_structures: [none]
+  intent_modes: [null]
+  alphas: [null]
+  latencies_ms: [250]
+  seeds: 5
