@@ -4,9 +4,12 @@
 
 seed: 1337
 
+# Two, not three. There is no processed-epoch stage: filtering, epoching and
+# standardisation run in process inside epoch_subject, and the cache boundary of
+# this project is the posterior .npz rather than an epoch file. See
+# docs/decisions.md D54.
 paths:
   data_raw: data/raw
-  data_processed: data/processed
   artifacts: artifacts
 
 # Falls back to cpu with a loud warning, never silently.

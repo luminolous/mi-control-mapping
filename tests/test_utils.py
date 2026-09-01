@@ -33,7 +33,9 @@ def test_base_config_loads_and_resolves() -> None:
     cfg = load_config("base")
     container = resolved_container(cfg)
     assert container["seed"] == 1337
-    assert set(container["paths"]) == {"data_raw", "data_processed", "artifacts"}
+    # Exactly these two. A path nobody reads sends a reviewer looking for the
+    # stage that writes it; see docs/decisions.md D54.
+    assert set(container["paths"]) == {"data_raw", "artifacts"}
 
 
 def test_load_config_is_struct_mode() -> None:
