@@ -258,7 +258,34 @@ class ReplayVariant:
     window_s: float
     stride_s: float
     gap_s: float
-    posterior_hash: str | None
+    # One hash per decoder. The cache config hash covers the decoder block and
+    # so differs between decoders, while a single value would send every decoder
+    # of a three-decoder experiment looking for one file. The decoder name is
+    # already in the filename; the hash disambiguates the rest of the config
+    # that produced it. See docs/decisions.md D58.
+    posterior_hash: dict[str, str | None]
+
+    def hash_for(self, decoder: str) -> str:
+        """The cache hash this decoder's posteriors were written under.
+
+        Raises:
+            KeyError: if the config names no hash for that decoder, or names a
+                null one, which means the caching script has not been run for it.
+        """
+        if decoder not in self.posterior_hash:
+            raise KeyError(
+                f"replay variant {self.key!r} has no posterior_hash for decoder "
+                f"{decoder!r}; the caching script prints one hash per decoder. "
+                f"Present: {sorted(self.posterior_hash)}"
+            )
+        found = self.posterior_hash[decoder]
+        if found is None:
+            raise KeyError(
+                f"replay variant {self.key!r} has a null posterior_hash for decoder "
+                f"{decoder!r}; run scripts/02_cache_posteriors.py decoder={decoder} "
+                "and write the hash it prints into the config"
+            )
+        return found
 
 
 def variant_key(protocol: str, window_s: float) -> str:
@@ -300,7 +327,10 @@ def resolve_variants(cfg: DictConfig) -> dict[str, ReplayVariant]:
             window_s=float(node.window_s),
             stride_s=float(node.stride_s),
             gap_s=float(node.gap_s),
-            posterior_hash=None if node.posterior_hash is None else str(node.posterior_hash),
+            posterior_hash={
+                str(decoder): None if value is None else str(value)
+                for decoder, value in node.posterior_hash.items()
+            },
         )
     return variants
 
@@ -659,6 +689,7 @@ def load_arrays(cell: Cell, cfg: DictConfig) -> tuple[dict[str, np.ndarray], flo
         FileNotFoundError: naming the cache file that was expected. There is no
             silent recomputation: a missing cache means the caching script has
             not been run for this configuration.
+        KeyError: if the config names no cache hash for this cell's decoder.
     """
     variant = variant_for(cell, resolve_variants(cfg))
 
@@ -676,13 +707,6 @@ def load_arrays(cell: Cell, cfg: DictConfig) -> tuple[dict[str, np.ndarray], flo
         )
         return arrays, float("nan")
 
-    if variant.posterior_hash is None:
-        raise ValueError(
-            f"synthetic.enabled is false but replay variant {variant.key!r} has a null "
-            "posterior_hash; name the config hash of the cache to read, which "
-            "scripts/02_cache_posteriors.py prints when it writes"
-        )
-
     path = posterior_path(
         Path(cfg.paths.artifacts),
         subject=cell.subject,
@@ -690,7 +714,7 @@ def load_arrays(cell: Cell, cfg: DictConfig) -> tuple[dict[str, np.ndarray], flo
         decoder=cell.decoder,
         window_ms=round(variant.window_s * 1000),
         stride_ms=round(variant.stride_s * 1000),
-        cfg_hash=variant.posterior_hash,
+        cfg_hash=variant.hash_for(cell.decoder),
     )
     if not path.is_file():
         raise FileNotFoundError(

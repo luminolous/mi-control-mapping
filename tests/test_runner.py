@@ -199,13 +199,23 @@ def test_the_grid_enumerates_the_product_of_its_axes(cfg: DictConfig) -> None:
     assert len({cell.key() for cell in cells}) == len(cells)
 
 
+def _rehash(cfg: DictConfig, hashes: dict[str, str]) -> DictConfig:
+    """A copy of the config whose one replay variant carries exactly `hashes`."""
+    rebuilt = OmegaConf.create(OmegaConf.to_container(cfg, resolve=True))
+    assert isinstance(rebuilt, DictConfig)
+    rebuilt.replay_variants.burst_w2000.posterior_hash = hashes
+    return rebuilt
+
+
 def test_a_missing_cache_names_the_file_it_wanted(cfg: DictConfig) -> None:
     """No silent recomputation: the caching script has simply not been run."""
     real = OmegaConf.merge(
         cfg,
         {
             "synthetic": {"enabled": False},
-            "replay_variants": {"burst_w2000": {"posterior_hash": "deadbeef"}},
+            "replay_variants": {
+                "burst_w2000": {"posterior_hash": {"synthetic": "deadbeef"}}
+            },
         },
     )
     assert isinstance(real, DictConfig)
@@ -217,8 +227,32 @@ def test_a_missing_cache_names_the_file_it_wanted(cfg: DictConfig) -> None:
 def test_a_real_run_without_a_posterior_hash_says_so(cfg: DictConfig) -> None:
     real = OmegaConf.merge(cfg, {"synthetic": {"enabled": False}})
     assert isinstance(real, DictConfig)
-    with pytest.raises(ValueError, match="has a null posterior_hash"):
+    with pytest.raises(KeyError, match="null posterior_hash for decoder"):
         load_arrays(enumerate_cells(real)[0], real)
+
+
+def test_a_decoder_with_no_hash_of_its_own_is_refused(cfg: DictConfig) -> None:
+    """The cache hash covers the decoder block, so the three decoders of `main`
+    were written under three different hashes. One shared value would send every
+    decoder looking for the same file. See docs/decisions.md D58."""
+    # Rebuilt rather than merged: struct mode refuses a key the config does not
+    # already declare, which is the same protection working one level up.
+    real = _rehash(cfg, {"riemann": "deadbeef"})
+    real.synthetic.enabled = False
+    # The smoke grid names the `synthetic` decoder, which this config has no
+    # hash for.
+    with pytest.raises(KeyError, match="no posterior_hash for decoder 'synthetic'"):
+        load_arrays(enumerate_cells(real)[0], real)
+
+
+def test_each_decoder_reads_its_own_cache_file(cfg: DictConfig) -> None:
+    """Two decoders must not resolve to one path, which is what a single shared
+    hash produced."""
+    from micm.eval.runner import resolve_variants, variant_for
+
+    real = _rehash(cfg, {"riemann": "aaaaaaaa", "fbcsp": "bbbbbbbb"})
+    variant = variant_for(enumerate_cells(real)[0], resolve_variants(real))
+    assert variant.hash_for("riemann") != variant.hash_for("fbcsp")
 
 
 # --- output contract ---

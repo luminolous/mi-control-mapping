@@ -21,13 +21,3 @@ logging:
 
 # How many episodes between runner progress lines.
 progress_every: 100
-
-# Score intervals in summary.json. Not excluded from the config hash: these
-# change the numbers the summary reports.
-aggregate:
-  # Subjects are resampled, never episodes; see src/micm/eval/aggregate.py.
-  n_boot: 1000
-  ci: 0.95
-  # Below this a between-subject interval is not defined and the entry says so
-  # rather than reporting a zero-width one that looks like precision.
-  min_subjects: 3

@@ -41,12 +41,20 @@ synthetic:
   confidence: 0.7
 
 # Which cache each replay condition reads, written here once the caching script
-# has printed its config hash. Null until then: reaching a null with
-# `synthetic.enabled` false raises and names the variant, rather than silently
-# reading some other file.
+# has printed its config hash.
+#
+# One hash per decoder, because the cache config hash covers the decoder block
+# and therefore differs between them. The decoder name is already in the
+# filename; the hash disambiguates everything else about the config that
+# produced it. Null until the caching script has been run: reaching a null with
+# `synthetic.enabled` false raises and names the variant and the decoder, rather
+# than silently reading some other file. See docs/decisions.md D58.
 replay_variants:
   burst_w2000:
-    posterior_hash: null
+    posterior_hash:
+      fbcsp: null
+      riemann: null
+      eegnet: null
 
 # Parameters of the structured-error variants, read when a grid names one.
 error_structure:
@@ -65,3 +73,16 @@ sanity:
   chance_episodes: 3
   oracle_threshold: 0.95
   chance_threshold: 0.3
+
+# Score intervals in summary.json. Here rather than in base.yaml, which
+# scripts/02_cache_posteriors.py also composes: these values change the numbers
+# the summary reports and so belong in the hash, but they have nothing to do
+# with decoding a window, and leaving them in base renamed every posterior cache
+# file whenever a bootstrap setting moved. See docs/decisions.md D58.
+aggregate:
+  # Subjects are resampled, never episodes; see src/micm/eval/aggregate.py.
+  n_boot: 1000
+  ci: 0.95
+  # Below this a between-subject interval is not defined and the entry says so
+  # rather than reporting a zero-width one that looks like precision.
+  min_subjects: 3

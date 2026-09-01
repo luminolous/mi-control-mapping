@@ -51,13 +51,14 @@ synthetic:
 # Read only when `synthetic.enabled` is false.
 session: E
 
-# Which cache each replay condition reads. Null rather than `???`, because a
-# mandatory-missing value breaks config hashing and the hash has to work for a
-# synthetic run too; a null reached with synthetic posteriors off raises and
-# names the variant.
+# Which cache each replay condition reads, one hash per decoder. Null rather
+# than `???`, because a mandatory-missing value breaks config hashing and the
+# hash has to work for a synthetic run too; a null reached with synthetic
+# posteriors off raises and names the variant and the decoder.
 replay_variants:
   burst_w2000:
-    posterior_hash: null
+    posterior_hash:
+      synthetic: null
 
 grid:
   subjects: [1]
@@ -112,3 +113,16 @@ sanity:
 env:
   n_targets: 3
   timeout_s: 75.0
+
+# Score intervals in summary.json. Here rather than in base.yaml, which
+# scripts/02_cache_posteriors.py also composes: these values change the numbers
+# the summary reports and so belong in the hash, but they have nothing to do
+# with decoding a window, and leaving them in base renamed every posterior cache
+# file whenever a bootstrap setting moved. See docs/decisions.md D58.
+aggregate:
+  # Subjects are resampled, never episodes; see src/micm/eval/aggregate.py.
+  n_boot: 1000
+  ci: 0.95
+  # Below this a between-subject interval is not defined and the entry says so
+  # rather than reporting a zero-width one that looks like precision.
+  min_subjects: 3
