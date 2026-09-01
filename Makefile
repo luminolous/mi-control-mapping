@@ -12,7 +12,7 @@ help:
 	@echo "decode     cache posteriors for the runner"
 	@echo "run        execute an experiment matrix (make run EXP=lambda_sweep)"
 	@echo "analyze    fit the hypothesis models for a run (make analyze RUN=<dir>)"
-	@echo "figures    render the paper figures from a run directory"
+	@echo "figures    render the paper figures (make figures RUN="<dir> <dir> ...")"
 	@echo "test       pytest"
 	@echo "smoke      synthetic posteriors, 1 subject, 4 mappings, 4 episodes, seconds"
 	@echo "lint       ruff check + mypy"
@@ -42,7 +42,7 @@ analyze:
 	$(PYTHON) scripts/04_analyze.py $(RUN)
 
 figures:
-	$(PYTHON) scripts/05_make_figures.py
+	$(PYTHON) scripts/05_make_figures.py $(RUN)
 
 test:
 	$(PYTHON) -m pytest

@@ -32,7 +32,14 @@ from micm.utils.seeding import generator_for
 logger = get_logger(__name__)
 
 # Metrics summarised in the scores block.
+#
+# `effective_acc` is not a closed-loop outcome but the achieved posterior
+# accuracy of the cell. It is here because the main figure plots success rate
+# against it, and `agents/05` §6 requires a figure to read a number rather than
+# derive one: without it the x axis would have to be recomputed from the
+# Parquet by every figure that wants it.
 SCORE_COLUMNS: Final[tuple[str, ...]] = (
+    "effective_acc",
     "success_rate",
     "path_efficiency",
     "time_to_target_median",

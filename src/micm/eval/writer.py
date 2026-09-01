@@ -23,7 +23,7 @@ from typing import Any, Final
 
 import numpy as np
 import pandas as pd
-from omegaconf import DictConfig
+from omegaconf import DictConfig, OmegaConf
 
 import micm
 from micm.eval.aggregate import scores_block
@@ -165,6 +165,66 @@ def validate_schema(frame: pd.DataFrame) -> None:
             f"episodes schema mismatch: missing {missing}, extra {extra}, "
             f"or order differs from the contract"
         )
+
+
+
+@dataclass(frozen=True)
+class LoadedRun:
+    """A run directory read back: the episodes, the config, and the summary.
+
+    The reader lives beside the writer because they share one format. Both the
+    analysis script and the figures read runs, and two loaders would drift.
+    """
+
+    directory: Path
+    episodes: pd.DataFrame
+    config: DictConfig
+    summary: dict[str, Any]
+
+    @property
+    def experiment(self) -> str:
+        return str(self.config.name)
+
+
+def load_run(directory: Path) -> LoadedRun:
+    """Read a run directory.
+
+    Raises:
+        FileNotFoundError: naming whichever of the three files is missing. A run
+            directory is renamed into place only once it is complete, so a
+            missing file means this is not a run directory rather than that the
+            run stopped half way.
+        ValueError: if the episode frame does not match the schema contract, so
+            a figure or a model never sees a frame the writer would have
+            rejected.
+    """
+    for name in ("episodes.parquet", "summary.json", "config.yaml"):
+        if not (directory / name).is_file():
+            raise FileNotFoundError(f"{directory} has no {name}; is it a run directory?")
+
+    frame = pd.read_parquet(directory / "episodes.parquet")
+    validate_schema(frame)
+
+    config = OmegaConf.load(directory / "config.yaml")
+    if not isinstance(config, DictConfig):
+        raise TypeError(f"{directory / 'config.yaml'} did not resolve to a mapping")
+
+    summary = json.loads((directory / "summary.json").read_text(encoding="utf-8"))
+    return LoadedRun(directory=directory, episodes=frame, config=config, summary=summary)
+
+
+def write_summary(directory: Path, summary: dict[str, Any]) -> None:
+    """Replace a run's `summary.json` atomically.
+
+    Written to a sibling and renamed, so an interrupted rewrite leaves the
+    previous summary rather than a file that parses as valid JSON up to the
+    point it stops.
+    """
+    staging = directory / ".summary.json.partial"
+    staging.write_text(
+        json.dumps(summary, indent=2, sort_keys=True, allow_nan=True) + "\n", encoding="utf-8"
+    )
+    staging.replace(directory / "summary.json")
 
 
 def meta_block(

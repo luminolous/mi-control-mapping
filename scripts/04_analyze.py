@@ -25,54 +25,16 @@ been fitted unless `--force`, so a re-analysis is always deliberate.
 from __future__ import annotations
 
 import argparse
-import json
 import logging
 import sys
 from pathlib import Path
-from typing import Any
-
-import pandas as pd
-from omegaconf import DictConfig, OmegaConf
 
 from micm.eval.aggregate import scores_block
 from micm.eval.stats import NotFittableError, stats_block
+from micm.eval.writer import load_run, write_summary
 from micm.utils import configure_logging, get_logger, load_config
 
 logger = get_logger(__name__)
-
-
-def load_run(directory: Path) -> tuple[pd.DataFrame, DictConfig, dict[str, Any]]:
-    """Episodes, the config that produced them, and the existing summary.
-
-    Raises:
-        FileNotFoundError: naming whichever of the three files is missing. A run
-            directory is written atomically, so a missing file means the path is
-            not a run directory rather than that the run half-finished.
-    """
-    for name in ("episodes.parquet", "summary.json", "config.yaml"):
-        if not (directory / name).is_file():
-            raise FileNotFoundError(f"{directory} has no {name}; is it a run directory?")
-
-    frame = pd.read_parquet(directory / "episodes.parquet")
-    loaded = OmegaConf.load(directory / "config.yaml")
-    if not isinstance(loaded, DictConfig):
-        raise TypeError(f"{directory / 'config.yaml'} did not resolve to a mapping")
-    summary = json.loads((directory / "summary.json").read_text(encoding="utf-8"))
-    return frame, loaded, summary
-
-
-def write_summary(directory: Path, summary: dict[str, Any]) -> None:
-    """Replace `summary.json` atomically.
-
-    Written to a sibling and renamed, so an interrupted analysis leaves the
-    previous summary intact rather than a truncated file that parses as valid
-    JSON up to the point it stops.
-    """
-    staging = directory / ".summary.json.partial"
-    staging.write_text(
-        json.dumps(summary, indent=2, sort_keys=True, allow_nan=True) + "\n", encoding="utf-8"
-    )
-    staging.replace(directory / "summary.json")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -89,7 +51,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("overrides", nargs="*", help="Hydra overrides, e.g. response=effective_itr")
     args = parser.parse_args(argv)
 
-    frame, run_cfg, summary = load_run(args.run_dir)
+    run = load_run(args.run_dir)
+    frame, run_cfg, summary = run.episodes, run.config, run.summary
     configure_logging(getattr(logging, str(run_cfg.logging.level)))
 
     if summary.get("stats", {}).get("h1") is not None and not args.force:
