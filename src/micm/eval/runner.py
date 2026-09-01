@@ -377,8 +377,26 @@ class EpisodeResult:
     kappa_offline: float
     direction_perm: str
     bursts_without_command: int
+    command_accuracy: float
+    commands_issued: int
     wall_time_s: float
     trials_consumed: list[int] = field(default_factory=list)
+
+
+def commanded_class(command: np.ndarray, directions: np.ndarray) -> int | None:
+    """Which class the issued command points at, or None if it points nowhere.
+
+    The nearest class direction to the command actually sent, not the argmax of
+    the posterior. Those differ, and the difference is the point: S3 commands
+    only once its accumulated evidence is strong, and S4 has an autonomy term
+    that pulls toward the target whatever the posterior said. Measuring the
+    posterior instead would score every mapping identically and say nothing
+    about the mapping under test.
+    """
+    norm = float(np.hypot(command[0], command[1]))
+    if norm <= 0.0:
+        return None
+    return int(np.argmax(directions @ (command / norm)))
 
 
 def _decoded_direction(posterior: np.ndarray, directions: np.ndarray) -> np.ndarray:
@@ -473,6 +491,12 @@ def run_episode(
 
     buffer: LatencyBuffer[np.ndarray] = LatencyBuffer(latency_s)
     bursts_without_command = 0
+    # Sampled once per decoder update that produced a command, never per
+    # environment step: at 100 Hz against a 4 Hz decoder the latter would count
+    # each posterior about twenty-five times. The same reason UCI is sampled
+    # that way. See docs/decisions.md D57.
+    commands_issued = 0
+    commands_correct = 0
 
     # The task's own per-target timeout already bounds the episode, so this is a
     # guard against a non-terminating task rather than a budget. It is derived
@@ -520,6 +544,15 @@ def run_episode(
                 # its threshold, which is legitimate and must be recorded rather
                 # than smoothed over as a zero command.
                 commanded = commanded or bool(np.any(command))
+                if update:
+                    # Against the class the burst was drawn for, which is what
+                    # the user was imagining for its whole length, rather than
+                    # the task's current target: acquiring a target mid-burst
+                    # does not retroactively change what was intended.
+                    pointed_at = commanded_class(command, directions)
+                    if pointed_at is not None:
+                        commands_issued += 1
+                        commands_correct += int(pointed_at == burst.label)
                 outcome = task.step(
                     command,
                     decoded_intent=_decoded_direction(available, directions),
@@ -544,6 +577,13 @@ def run_episode(
         kappa_offline=kappa_offline,
         direction_perm=",".join(str(int(value)) for value in permutation),
         bursts_without_command=bursts_without_command,
+        # NaN rather than zero when nothing was ever commanded: a mapping that
+        # never committed has no command accuracy, and zero would read as one
+        # that committed and was always wrong.
+        command_accuracy=(
+            commands_correct / commands_issued if commands_issued else float("nan")
+        ),
+        commands_issued=commands_issued,
         wall_time_s=time.perf_counter() - started,
     )
 

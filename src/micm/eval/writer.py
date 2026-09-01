@@ -55,6 +55,10 @@ EPISODE_SCHEMA: Final[dict[str, str]] = {
     "direction_perm": "string",
     "kappa_offline": "float32",
     "effective_acc": "float32",
+    # An addition to the contract, like `quality_level` (D35): the figure
+    # `agents/05` §6 asks for plots latency against it, and no column carried
+    # it. See docs/decisions.md D57.
+    "command_accuracy": "float32",
     "success_rate": "float32",
     "n_success": "int8",
     "time_to_target_median": "float32",
@@ -129,6 +133,7 @@ def episodes_frame(
                 "direction_perm": result.direction_perm,
                 "kappa_offline": result.kappa_offline,
                 "effective_acc": result.effective_acc,
+                "command_accuracy": result.command_accuracy,
                 "success_rate": metrics.success_rate,
                 "n_success": metrics.n_success,
                 "time_to_target_median": metrics.time_to_target_median,

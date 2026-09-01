@@ -341,58 +341,88 @@ def figure_alpha_sweep(run: LoadedRun) -> Figure:
     return figure
 
 
-# --- 4. what waiting for evidence costs ---
+# --- 4. what latency costs the command ---
 
 
-def figure_command_tradeoff(run: LoadedRun) -> Figure:
-    """What a mapping pays for the commands it declines to issue.
+def figure_command_accuracy(run: LoadedRun) -> Figure:
+    """Command accuracy against feedback latency, one line per mapping.
 
-    **Not the figure `agents/05` §6 asks for.** That one is an S3 Pareto front of
-    latency against command accuracy, and neither quantity is in the episode
-    schema: there is no `command_accuracy` column and no S3 threshold sweep in
-    the experiment matrix. Rather than invent either, this plots the two columns
-    that do exist and carry the same trade: `bursts_without_command`, which
-    counts the bursts a mapping let pass without committing, against the success
-    rate it bought by waiting. S3 is the mapping that can move along this axis;
-    the others are shown for scale. See docs/decisions.md D55.
+    Command accuracy is the fraction of issued commands whose direction pointed
+    at the class the user was imagining, measured on the command actually sent
+    rather than on the posterior behind it. That distinction is the figure: S3
+    commands only once its accumulated evidence is strong and should sit above
+    the rest, and S4's autonomy term pulls toward the target whatever the
+    posterior said, which is the leakage the intent ablation prices.
+
+    Marker size carries how often the mapping declined to command at all, so a
+    high accuracy bought by rarely committing is visible as a large marker
+    rather than looking like a free win.
+
+    **Partly the figure `agents/05` §6 asks for.** That one is an S3 Pareto
+    front, which needs the evidence threshold as a third axis; no `s3_sweep`
+    experiment exists, so the front is traced across mappings and latencies
+    rather than across thresholds. See docs/decisions.md D55a.
     """
     apply_theme()
-    figure, axes = plt.subplots(figsize=(5.2, 3.6))
-    frame = run.episodes
+    figure, axes = plt.subplots(figsize=(5.4, 3.6))
+    table = cell_table(run)
 
-    grouped = (
-        frame.groupby(["mapping", "latency_ms"], dropna=False, observed=True)[
-            ["bursts_without_command", "success_rate"]
-        ]
-        .mean()
-        .reset_index()
-    )
+    if "command_accuracy_mean" not in table:
+        note(axes, "this run's summary carries no command accuracy")
+        figure.suptitle("Command accuracy against feedback latency", y=1.0)
+        return figure
 
-    for mapping, group in grouped.groupby("mapping", dropna=False):
+    axis = "latency_ms" if "latency_ms" in table else None
+    if axis is None:
+        note(axes, "this run does not vary latency")
+        figure.suptitle("Command accuracy against feedback latency", y=1.0)
+        return figure
+
+    declined = table.get("bursts_without_command_mean")
+    scale = 1.0 if declined is None or declined.max() in (0, None) else float(declined.max())
+
+    for mapping, group in table.groupby("mapping", dropna=False):
         style = style_for(str(mapping))
-        ordered = group.sort_values("latency_ms")
+        ordered = group.sort_values(axis)
         axes.plot(
-            ordered["bursts_without_command"],
-            ordered["success_rate"],
+            ordered[axis],
+            ordered["command_accuracy_mean"],
             color=style.color,
             linestyle=style.linestyle,
-            marker=style.marker,
             label=style.label,
         )
-        for _, row in ordered.iterrows():
-            axes.annotate(
-                f"{int(row['latency_ms'])} ms",
-                xy=(row["bursts_without_command"], row["success_rate"]),
-                xytext=(3, 3),
-                textcoords="offset points",
-                fontsize=7,
-                color="#7F7F7F",
-            )
+        _ribbon(axes, ordered, axis, "command_accuracy", style.color)
+        sizes = (
+            20.0
+            if "bursts_without_command_mean" not in ordered
+            else 20.0 + 80.0 * ordered["bursts_without_command_mean"].fillna(0.0) / scale
+        )
+        axes.scatter(
+            ordered[axis],
+            ordered["command_accuracy_mean"],
+            s=sizes,
+            color=style.color,
+            marker=style.marker,
+            edgecolor="white",
+            linewidth=0.4,
+            zorder=3,
+        )
 
-    axes.set_xlabel(label_for("bursts_without_command"))
-    axes.set_ylabel(label_for("success_rate"))
+    axes.axhline(1.0 / 4.0, **REFERENCE_LINE)
+    axes.annotate(
+        "chance",
+        xy=(axes.get_xlim()[0], 0.25),
+        xytext=(2, 3),
+        textcoords="offset points",
+        fontsize=8,
+        color="#7F7F7F",
+    )
+    axes.set_xlabel(label_for(axis))
+    axes.set_ylabel(label_for("command_accuracy"))
     axes.legend(loc="best")
-    figure.suptitle("What declining to command costs, by feedback latency", y=1.0)
+    figure.suptitle(
+        "Command accuracy against latency (marker size: bursts left uncommanded)", y=1.0
+    )
     return figure
 
 

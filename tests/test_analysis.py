@@ -182,6 +182,7 @@ def test_every_subject_appears_in_the_breakdown() -> None:
 def _missing_score_columns() -> dict[str, float]:
     return {
         "effective_acc": 0.7,
+        "command_accuracy": 0.7,
         "path_efficiency": 1.0,
         "time_to_target_median": 5.0,
         "direction_reversals": 2.0,
@@ -574,20 +575,31 @@ def as_episodes(frame: pd.DataFrame, experiment: str) -> pd.DataFrame:
     to carry every column even where the value is a placeholder. That is the
     validation working: a figure must never see a frame the writer would have
     rejected.
+
+    A column the caller already set is left alone. Filling it anyway would make
+    a test that varies one of these silently compare a constant, which is how a
+    figure came out as four flat lines once already.
     """
     filled = frame.copy()
-    filled["experiment"] = experiment
-    filled["run_id"] = "synthetic"
-    filled["lam"] = filled["quality_level"]
-    filled["stride_s"] = 0.25
-    filled["direction_perm"] = "0,1,2,3"
-    filled["n_success"] = np.round(filled["success_rate"] * 8).astype(int)
-    filled["n_timeouts"] = 8 - filled["n_success"]
-    filled["collisions"] = 0
-    filled["uci_excluded_frac"] = 0.1
-    filled["bursts_without_command"] = 0
-    filled["episode_duration_s"] = 300.0
-    filled["wall_time_s"] = 12.0
+    defaults = {
+        "experiment": experiment,
+        "run_id": "synthetic",
+        "lam": filled["quality_level"],
+        "stride_s": 0.25,
+        "direction_perm": "0,1,2,3",
+        "command_accuracy": filled["effective_acc"],
+        "n_success": np.round(filled["success_rate"] * 8).astype(int),
+        "collisions": 0,
+        "uci_excluded_frac": 0.1,
+        "bursts_without_command": 0,
+        "episode_duration_s": 300.0,
+        "wall_time_s": 12.0,
+    }
+    for column, value in defaults.items():
+        if column not in filled:
+            filled[column] = value
+    if "n_timeouts" not in filled:
+        filled["n_timeouts"] = 8 - filled["n_success"]
     return filled[list(EPISODE_SCHEMA)].astype(EPISODE_SCHEMA)
 
 

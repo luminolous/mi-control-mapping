@@ -40,6 +40,7 @@ logger = get_logger(__name__)
 # Parquet by every figure that wants it.
 SCORE_COLUMNS: Final[tuple[str, ...]] = (
     "effective_acc",
+    "command_accuracy",
     "success_rate",
     "path_efficiency",
     "time_to_target_median",

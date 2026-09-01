@@ -15,9 +15,11 @@ import numpy as np
 import pytest
 from omegaconf import DictConfig, OmegaConf
 
+from micm.env.task import direction_table
 from micm.eval.runner import (
     Cell,
     TrialPool,
+    commanded_class,
     enumerate_cells,
     load_arrays,
     run_all,
@@ -48,6 +50,7 @@ CONTRACT_COLUMNS = [
     "direction_perm",
     "kappa_offline",
     "effective_acc",
+    "command_accuracy",
     "success_rate",
     "n_success",
     "time_to_target_median",
@@ -367,6 +370,81 @@ def test_the_smoke_configuration_stays_inside_its_time_budget(cfg: DictConfig) -
 def test_the_smoke_grid_stays_small(cfg: DictConfig) -> None:
     assert len(enumerate_cells(cfg)) <= 4
     assert bool(cfg.synthetic.enabled)
+
+
+# --- command accuracy ---
+
+
+def test_a_zero_command_points_at_no_class() -> None:
+    """S3 can hold a posterior without committing, and a held command must not
+    be scored as a wrong one."""
+    assert commanded_class(np.zeros(2), direction_table()) is None
+
+
+def test_a_command_along_a_class_direction_is_that_class() -> None:
+    directions = direction_table()
+    for index, direction in enumerate(directions):
+        assert commanded_class(direction * 0.15, directions) == index
+
+
+def test_a_command_between_two_directions_takes_the_nearer_one() -> None:
+    directions = direction_table()
+    nudged = directions[0] * 0.9 + directions[1] * 0.1
+    assert commanded_class(nudged, directions) == 0
+
+
+def test_command_accuracy_measures_the_command_and_not_the_posterior(
+    cfg: DictConfig,
+) -> None:
+    """They differ, and the difference is the point: S3 commands only once its
+    evidence is strong and S4 has an autonomy term pulling toward the target."""
+    results = {result.cell.mapping: result for result in run_all(cfg)}
+    argmax, shared = results["s1_argmax"], results["s4_shared"]
+
+    # An oracle posterior, so argmax commands the right way every time.
+    assert argmax.command_accuracy == pytest.approx(1.0)
+    # S4 blends in an autonomy term, which does not point along a class
+    # direction, so it scores lower on the same posteriors.
+    assert shared.command_accuracy < argmax.command_accuracy
+
+
+def test_command_accuracy_is_sampled_per_decoder_update(cfg: DictConfig) -> None:
+    """Not per environment step. At 100 Hz against a 4 Hz decoder the latter
+    would count each posterior about twenty-five times."""
+    result = next(result for result in run_all(cfg) if result.cell.mapping == "s1_argmax")
+    windows = int(cfg.synthetic.n_bursts) * int(cfg.synthetic.n_windows)
+    assert 0 < result.commands_issued <= windows
+
+
+def test_command_accuracy_is_nan_when_nothing_was_ever_commanded(cfg: DictConfig) -> None:
+    """Zero would read as a mapping that committed and was always wrong.
+
+    Reached with a latency longer than the burst: the buffer never releases a
+    posterior, so no command is ever issued and there is nothing to be accurate
+    about.
+    """
+    from micm.eval.runner import load_arrays, run_episode
+
+    cell = Cell(
+        experiment="never_commands",
+        subject=1,
+        decoder="synthetic",
+        mapping="s1_argmax",
+        quality_level=1.0,
+        protocol="burst",
+        window_s=2.0,
+        error_struct="none",
+        intent_mode=None,
+        alpha=None,
+        latency_ms=10_000,
+        seed=0,
+    )
+    arrays, _ = load_arrays(cell, cfg)
+    result = run_episode(cell, arrays, cfg)
+
+    assert result.commands_issued == 0
+    assert np.isnan(result.command_accuracy)
+    assert result.bursts_without_command > 0
 
 
 def test_a_cell_key_is_content_addressed() -> None:

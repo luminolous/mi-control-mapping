@@ -87,6 +87,7 @@ METRIC_LABELS: Final[dict[str, str]] = {
     "effective_itr": "effective ITR (bits/min)",
     "user_contribution_index": "user contribution index",
     "bursts_without_command": "bursts with no command",
+    "command_accuracy": "command accuracy",
     "latency_ms": "feedback latency (ms)",
     "window_s": "decoding window (s)",
     "alpha": "autonomy level $\\alpha$",

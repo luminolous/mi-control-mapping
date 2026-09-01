@@ -171,7 +171,7 @@ def test_all_six_figures_render_from_a_full_run(
         viz.figure_quality_sweep(sweep_run),
         viz.figure_kappa_against_success(sweep_run),
         viz.figure_alpha_sweep(autonomy_run),
-        viz.figure_command_tradeoff(sweep_run),
+        viz.figure_command_accuracy(sweep_run),
         viz.figure_ablation_grid(runs),
         viz.figure_intent_ablation(autonomy_run),
     ]
@@ -187,7 +187,7 @@ def test_all_six_figures_render_from_a_run_that_varies_almost_nothing(
         viz.figure_quality_sweep(flat_run),
         viz.figure_kappa_against_success(flat_run),
         viz.figure_alpha_sweep(flat_run),
-        viz.figure_command_tradeoff(flat_run),
+        viz.figure_command_accuracy(flat_run),
         viz.figure_ablation_grid({"lambda_sweep": flat_run}),
         viz.figure_intent_ablation(flat_run),
     ]

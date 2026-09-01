@@ -28,7 +28,7 @@ from micm.utils import configure_logging, get_logger
 from micm.viz.figures import (
     figure_ablation_grid,
     figure_alpha_sweep,
-    figure_command_tradeoff,
+    figure_command_accuracy,
     figure_intent_ablation,
     figure_kappa_against_success,
     figure_quality_sweep,
@@ -44,7 +44,7 @@ FIGURE_SOURCES: dict[str, tuple[str, ...]] = {
     "fig1_quality_sweep": ("lambda_sweep", "main"),
     "fig2_kappa_against_success": ("main", "lambda_sweep"),
     "fig3_alpha_sweep": ("alpha_sweep",),
-    "fig4_command_tradeoff": ("ablation_latency", "main"),
+    "fig4_command_accuracy": ("ablation_latency", "main"),
     "fig6_intent_ablation": ("ablation_intent_blind", "alpha_sweep"),
 }
 
@@ -105,9 +105,9 @@ def main(argv: list[str] | None = None) -> int:
         "fig3_alpha_sweep",
     )
     written += save_figure(
-        figure_command_tradeoff(pick(runs, FIGURE_SOURCES["fig4_command_tradeoff"])),
+        figure_command_accuracy(pick(runs, FIGURE_SOURCES["fig4_command_accuracy"])),
         args.out,
-        "fig4_command_tradeoff",
+        "fig4_command_accuracy",
     )
     written += save_figure(figure_ablation_grid(runs), args.out, "fig5_ablations")
     written += save_figure(
