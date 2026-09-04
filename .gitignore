@@ -228,6 +228,7 @@ CLAUDE.md
 
 # Project working documents kept out of version control by request
 docs/decisions.md
+docs/RESULTS.md
 
 # Datasets and run outputs. Both are reproducible from configs and are large.
 #
