@@ -18,6 +18,16 @@ name: eegnet
 # Riemannian decoder reproduce their published ranges from the same epochs.
 # EEGNet is kept as the deliberately weak point on the kappa axis.
 # See docs/decisions.md D22a.
+# STALE. Recorded when EEGNet scored 0.249, before the BatchNorm momentum fix
+# (D20) and the standardisation fix (D21). The decoder now reaches 0.466
+# window-level kappa, the best of the three, and is no longer the weak point on
+# the kappa axis that D22a kept it as.
+#
+# Not corrected here, because this guard is read by 01_fit_decoders.py, which
+# fits whole trials, while that 0.466 comes from 02_cache_posteriors.py, which
+# fits windows. Setting a trial-level guard from a window-level number would be
+# worse than leaving it visibly out of date. Re-measure by running
+# `01_fit_decoders.py decoder=eegnet`. See docs/decisions.md D22b.
 expected_kappa: [0.15, 0.35]
 kappa_is_published: false
 

@@ -18,9 +18,14 @@ name: lambda_sweep
 
 grid:
   subjects: [1, 2, 3, 4, 5, 6, 7, 8, 9]
-  # Riemann rather than the weakest or the strongest: oracle mixing only raises
-  # accuracy, so the sweep starts at that decoder's own level and moves up.
-  # Starting from the middle of the range covers the most of it.
+  # The lowest-baseline decoder, measured. Oracle mixing only raises accuracy,
+  # so the sweep starts at that decoder's own level and moves up, and the lowest
+  # start sweeps the longest range.
+  #
+  # This was chosen as the middle decoder of three. It is now the weakest: after
+  # the EEGNet fixes in D20 and D21 the three sit within 0.054 kappa of each
+  # other, with riemann at 0.412 the lowest. Same choice, opposite reason.
+  # See docs/decisions.md D22b.
   decoders: [riemann]
   mappings: [s1_argmax, s2_weighted, s3_evidence, s4_shared]
   # Read from the quality group rather than repeated here, so the levels the

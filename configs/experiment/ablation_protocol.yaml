@@ -23,7 +23,7 @@ name: ablation_protocol
 replay_variants:
   stitched_w2000:
     posterior_hash:
-      riemann: null
+      riemann: d8cb0665
 
 grid:
   subjects: [1, 2, 3, 4, 5, 6, 7, 8, 9]

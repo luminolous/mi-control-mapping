@@ -52,9 +52,9 @@ synthetic:
 replay_variants:
   burst_w2000:
     posterior_hash:
-      fbcsp: null
-      riemann: null
-      eegnet: null
+      fbcsp: a2f186f1
+      riemann: 82d81a44
+      eegnet: 00a06766
 
 # Parameters of the structured-error variants, read when a grid names one.
 error_structure:

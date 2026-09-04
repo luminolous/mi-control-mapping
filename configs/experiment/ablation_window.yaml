@@ -28,11 +28,11 @@ replay_variants:
   burst_w1000:
     window_s: 1.0
     posterior_hash:
-      riemann: null
+      riemann: 311d14ba
   burst_w3000:
     window_s: 3.0
     posterior_hash:
-      riemann: null
+      riemann: b4ed2d14
 
 grid:
   subjects: [1, 2, 3, 4, 5, 6, 7, 8, 9]
