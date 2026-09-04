@@ -12,6 +12,7 @@ directory for a later analysis to read as complete.
 from __future__ import annotations
 
 import json
+import os
 import platform
 import shutil
 import sys
@@ -232,6 +233,36 @@ def write_summary(directory: Path, summary: dict[str, Any]) -> None:
     staging.replace(directory / "summary.json")
 
 
+def host_block() -> dict[str, Any]:
+    """The machine the run executed on, per `agents/05` §3.
+
+    The GPU is reported because the config records the device that was
+    *requested* and `resolve_device` may have fallen back to CPU with a warning
+    that only reached the log. A summary that says `device: cuda` while the run
+    was on CPU is a wall-time figure nobody can interpret later.
+
+    Torch is imported here rather than at module scope: it is the optional `dl`
+    extra, and the runner half of this project installs without it. Whichever of
+    the two reasons applies is written down rather than left as an absent key.
+    """
+    try:
+        import torch
+    except ImportError:
+        gpu: str = "torch is not installed"
+    else:
+        gpu = (
+            torch.cuda.get_device_name(0)
+            if torch.cuda.is_available()
+            else f"torch {torch.__version__} reports no CUDA device"
+        )
+
+    return {
+        "platform": platform.platform(),
+        "cpu_count": os.cpu_count(),
+        "gpu": gpu,
+    }
+
+
 def meta_block(
     cfg: DictConfig, frame: pd.DataFrame, *, run_id: str, cfg_hash: str, wall_time_s: float
 ) -> dict[str, Any]:
@@ -246,7 +277,7 @@ def meta_block(
             "numpy": np.__version__,
             "pandas": pd.__version__,
         },
-        "host": {"platform": platform.platform()},
+        "host": host_block(),
         # What the score intervals were resampled from. It lives here rather
         # than inside `scores`, which `agents/05` §3 fixes at three keys.
         "aggregate": {
