@@ -113,6 +113,13 @@ sanity:
 env:
   n_targets: 3
   timeout_s: 75.0
+  # Three targets sit at 0, 120 and 240 degrees, so the obstacle bearings the
+  # eight-target environment uses land on top of them. Obstacle placement is
+  # relative to the target ring, not absolute: an obstacle on a target's bearing
+  # traps a four-direction controller (docs/decisions.md D61). These sit on the
+  # bisectors, 60 degrees from every target.
+  obstacles:
+    positions: [[0.3182, 0.5511], [-0.6364, 0.0], [0.3182, -0.5511]]
 
 # Score intervals in summary.json. Here rather than in base.yaml, which
 # scripts/02_cache_posteriors.py also composes: these values change the numbers

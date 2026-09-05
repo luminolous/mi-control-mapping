@@ -264,3 +264,64 @@ def test_one_failed_episode_aborts_the_whole_parallel_run() -> None:
     broken = _with(cfg, n_workers=2, grid={"mappings": ["s1_argmax", "s9_nonexistent"]})
     with pytest.raises(KeyError, match="s9_nonexistent"):
         run_all(broken)
+
+
+# --- the task must be solvable at every condition the grid names ---
+
+
+@pytest.mark.slow
+def test_an_oracle_decoder_reaches_every_target_at_every_latency() -> None:
+    """Obstacle placement is relative to the target ring, and a grid axis can move
+    the robot onto an obstacle that a different axis value clears.
+
+    This is the check that would have caught D61 before the numbers were run.
+    Obstacles sat on three of the four diagonal target bearings; a diagonal
+    target is approached in a staircase, so argmax walked into one head on, and
+    both cardinal directions its staircase alternates between pushed into it. An
+    oracle decoder reached 4 of 8 targets at 0 ms latency and 5 of 8 at 500 ms
+    while reaching all 8 at 125 and 250 ms, which reads exactly like a latency
+    effect and is not one.
+
+    The two extremes only: they are the ones that failed, and the middle two are
+    covered by the sanity block of every run.
+    """
+    from micm.eval.runner import Cell, run_episode, synthetic_arrays
+    from micm.utils.seeding import generator_for
+
+    cfg = load_config("experiment/ablation_latency")
+    assert isinstance(cfg, DictConfig)
+    arrays = synthetic_arrays(
+        generator_for(int(cfg.seed), "sanity", "oracle"),
+        n_bursts=int(cfg.synthetic.n_bursts),
+        n_windows=int(cfg.synthetic.n_windows),
+        n_classes=int(cfg.data.n_classes),
+        accuracy=1.0,
+        window_s=2.0,
+        stride_s=0.25,
+        confidence=1.0,
+    )
+
+    for latency in (int(min(cfg.grid.latencies_ms)), int(max(cfg.grid.latencies_ms))):
+        for mapping in cfg.grid.mappings:
+            metrics = run_episode(
+                Cell(
+                    experiment="ceiling",
+                    subject=1,
+                    decoder="synthetic",
+                    mapping=str(mapping),
+                    quality_level=1.0,
+                    protocol="burst",
+                    window_s=2.0,
+                    error_struct="none",
+                    intent_mode=None,
+                    alpha=None,
+                    latency_ms=latency,
+                    seed=0,
+                ),
+                arrays,
+                cfg,
+            ).metrics
+            assert metrics.success_rate == 1.0, (
+                f"{mapping} reached {metrics.n_success} of {int(cfg.env.n_targets)} targets "
+                f"at {latency} ms with a perfect decoder"
+            )

@@ -65,10 +65,29 @@ v_max: 0.15
 # burden and moves no result.
 tau: 0.0
 
+
 obstacles:
   # Placed off the target circle and away from the centre, so they obstruct the
   # diagonal approaches without making any target unreachable.
-  positions: [[0.45, 0.45], [-0.45, -0.45], [0.45, -0.45]]
+  #
+  # Rotated 11.25 degrees off the target diagonals. They used to sit exactly on
+  # them, at [[0.45, 0.45], [-0.45, -0.45], [0.45, -0.45]], which is 45, 225 and
+  # 315 degrees: the same bearings as three of the four diagonal targets.
+  #
+  # That trapped argmax. A diagonal target is approached in a staircase, so the
+  # robot walks along the diagonal and meets the obstacle head on; both cardinal
+  # directions the staircase alternates between then push into it, the collision
+  # resolver returns the robot to the surface each step, and no third direction
+  # is available to escape with. Measured, an oracle decoder was held there for
+  # the full 600 s timeout: 4 of 8 targets at 0 ms latency and 5 of 8 at 500 ms,
+  # while reaching all 8 at 125 and 250 ms. Latency sets how far the robot moves
+  # per burst and therefore where along the diagonal it lands, so the trap looked
+  # exactly like a latency effect.
+  #
+  # 11.25 degrees is half a target spacing: far enough that the staircase passes,
+  # near enough that the obstacles are still met, about four contacts an episode
+  # against zero with no obstacles at all. See docs/decisions.md D61.
+  positions: [[0.3512, 0.5303], [-0.3512, -0.5303], [0.5303, -0.3512]]
   radius: 0.12
   # Per-seed positional noise. Zero keeps the layout fixed across seeds.
   jitter: 0.0

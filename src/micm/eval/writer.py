@@ -233,6 +233,37 @@ def write_summary(directory: Path, summary: dict[str, Any]) -> None:
     staging.replace(directory / "summary.json")
 
 
+def code_version() -> str:
+    """The commit the run executed at, with a marker for uncommitted changes.
+
+    The config hash cannot serve here: it covers `configs/`, so a change to the
+    environment or a mapping produces a run directory whose hash is identical to
+    one produced by the old behaviour. That happened — obstacle placement moved
+    after four experiments had already been run, and nothing in those artifacts
+    said which geometry they came from. See docs/decisions.md D61.
+
+    Read-only: `rev-parse` and `status`, never a command that writes. A missing
+    git, or a checkout that is not a repository, is recorded as such rather than
+    left as an absent key.
+    """
+    import subprocess
+
+    def run(*args: str) -> str | None:
+        try:
+            done = subprocess.run(
+                ["git", *args], capture_output=True, text=True, timeout=10, check=False
+            )
+        except (OSError, subprocess.SubprocessError):
+            return None
+        return done.stdout.strip() if done.returncode == 0 else None
+
+    commit = run("rev-parse", "--short", "HEAD")
+    if commit is None:
+        return "not a git checkout, or git is not installed"
+    dirty = run("status", "--porcelain")
+    return f"{commit}-dirty" if dirty else commit
+
+
 def host_block() -> dict[str, Any]:
     """The machine the run executed on, per `agents/05` §3.
 
@@ -272,6 +303,7 @@ def meta_block(
         "config_hash": cfg_hash,
         "created_utc": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "micm_version": micm.__version__,
+        "git_commit": code_version(),
         "python": sys.version.split()[0],
         "packages": {
             "numpy": np.__version__,
