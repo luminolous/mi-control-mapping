@@ -131,19 +131,30 @@ def _ribbon(axes: Axes, frame: pd.DataFrame, x: str, metric: str, color: str) ->
     axes.fill_between(frame[x], low, high, color=color, alpha=RIBBON_ALPHA, linewidth=0)
 
 
-def _fit_line(axes: Axes, x: np.ndarray, y: np.ndarray, color: str) -> None:
+def _fit_line(
+    axes: Axes, x: np.ndarray, y: np.ndarray, color: str, bounds: tuple[float, float] | None = None
+) -> None:
     """A least-squares line through a scatter, as a drawing aid.
 
     Not the model. `summary.json` carries the mixed model that H1 is read from,
     which pools subjects with a random intercept; this line does not, and the
     two can differ. The caption says so.
+
+    `bounds` clips the drawn line to the range the response can actually take. A
+    straight line through a proportion runs past 1 at the top of the x range, and
+    drawing a success rate of 1.2 invites the reader to believe the axis rather
+    than the metric.
     """
     usable = np.isfinite(x) & np.isfinite(y)
     if usable.sum() < 3 or np.ptp(x[usable]) == 0.0:
         return
     slope, intercept = np.polyfit(x[usable], y[usable], 1)
-    span = np.linspace(x[usable].min(), x[usable].max(), 2)
-    axes.plot(span, slope * span + intercept, color=color, linewidth=1.2, alpha=0.8)
+    span = np.linspace(x[usable].min(), x[usable].max(), 64)
+    fitted = slope * span + intercept
+    if bounds is not None:
+        inside = (fitted >= bounds[0]) & (fitted <= bounds[1])
+        span, fitted = span[inside], fitted[inside]
+    axes.plot(span, fitted, color=color, linewidth=1.2, alpha=0.8)
 
 
 # --- 1. the main figure ---
@@ -243,6 +254,7 @@ def figure_kappa_against_success(run: LoadedRun) -> Figure:
             subset["kappa_offline"].to_numpy(dtype=float),
             subset["success_rate"].to_numpy(dtype=float),
             style.color,
+            bounds=(0.0, 1.0),
         )
         axes.set_title(style.label)
         axes.set_xlabel(label_for("kappa_offline"))
@@ -489,6 +501,9 @@ def figure_ablation_grid(runs: dict[str, LoadedRun], metric: str = "success_rate
     for axes in flat:
         if not handles:
             handles, labels = axes.get_legend_handles_labels()
+    # Room between the rows as well as under them: the lower panels' titles sit
+    # directly beneath the upper panels' x labels and collide without it.
+    figure.subplots_adjust(hspace=0.45)
     if handles:
         figure.legend(handles, labels, loc="lower center", ncol=len(labels))
         figure.subplots_adjust(bottom=0.16)
@@ -502,11 +517,18 @@ def figure_ablation_grid(runs: dict[str, LoadedRun], metric: str = "success_rate
 def figure_intent_ablation(run: LoadedRun) -> Figure:
     """Intent-aware against intent-blind S4, across autonomy.
 
-    Intent-aware reads the decoder twice, once through the user term and again
-    through its choice of attractive target, so part of any advantage it shows is
-    the decoder informing the autonomy rather than arbitration doing work.
-    Intent-blind attracts toward the active task target whatever the posterior
-    says. The gap between the two lines is that leakage, drawn.
+    The two variants differ in where the autonomy term aims. Intent-aware picks
+    the target most consistent with the decoded intent, so the decoder informs
+    the autonomy as well as the user term. Intent-blind aims at whichever target
+    the task has made active, which the posterior never sees.
+
+    **The gap is not leakage, and the measurement says which way it runs.** The
+    design expected intent-aware to be flattered by reading the decoder twice.
+    Measured, intent-blind is the higher line, by 0.24 to 0.33 success with every
+    interval clear of zero, because a wrong decoded target sends the autonomy to
+    the wrong place while the active target is always right. Intent-blind is not
+    a control condition holding less information; it holds ground truth the
+    decoder was supposed to supply. See docs/decisions.md D62.
     """
     apply_theme()
     figure, axes = plt.subplots(figsize=(5.2, 3.6))
@@ -533,5 +555,12 @@ def figure_intent_ablation(run: LoadedRun) -> Figure:
     axes.set_xlabel(label_for("alpha"))
     axes.set_ylabel(label_for("success_rate"))
     axes.legend(loc="best")
-    figure.suptitle("The gap between the two lines is the decoder leaking into the autonomy", y=1.0)
+    figure.suptitle(
+        "Where the autonomy aims: the decoded target, or the true one", y=1.0
+    )
+    axes.set_title(
+        "intent-blind is given the active target, so the gap prices that knowledge",
+        fontsize=8,
+        color="#7F7F7F",
+    )
     return figure
