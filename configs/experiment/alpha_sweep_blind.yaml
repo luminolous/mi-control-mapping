@@ -1,0 +1,50 @@
+# @package _global_
+#
+# Placed at the global package: a config under configs/experiment/ would
+# otherwise be nested under an `experiment` key by Hydra's directory-based
+# package inference, and every path in the runner would need that prefix.
+#
+# H3, on the variant that can answer it. `alpha_sweep` ran intent-aware, whose
+# autonomy chooses its attractive target from the decoded intent, so the decoder
+# still decides where the robot drives even at alpha = 1. Measured, its kappa
+# slope fell from 7.760 to 4.887 (3.492 to 6.281) and never reached zero, so no
+# alpha* exists for it and none can.
+#
+# Intent-blind aims at whichever target the task has made active, which the
+# posterior never sees. At alpha = 1 the decoder is out of the loop entirely —
+# the `alpha1_independence` sanity check asserts exactly that, to bit equality —
+# so the kappa slope must reach zero somewhere on this grid by construction, and
+# where it does is the estimate H3 asks for.
+#
+# Read alongside `ablation_intent_blind`, which prices what intent-blind's target
+# knowledge is worth: it is ground truth the decoder was supposed to supply, so
+# alpha* here is the level at which a *target-informed* autonomy makes the
+# decoder irrelevant, an upper bound rather than a property of S4 as deployed.
+# See docs/decisions.md D62 and D63.
+#
+# Not in the matrix table of `agents/05` §1. It is a ninth experiment, added
+# because the eighth could not answer the hypothesis it was written for.
+#
+# 1 mapping x 3 decoders x 9 subjects x 8 alphas x 10 seeds = 2160 episodes.
+
+defaults:
+  - /matrix_defaults
+  - _self_
+
+name: alpha_sweep_blind
+
+grid:
+  subjects: [1, 2, 3, 4, 5, 6, 7, 8, 9]
+  decoders: [fbcsp, riemann, eegnet]
+  mappings: [s4_shared]
+  quality_levels: [0.0]
+  protocols: [burst]
+  windows_s: [2.0]
+  error_structures: [none]
+  # The one difference from `alpha_sweep`.
+  intent_modes: [blind]
+  # The same eight points, so the two sweeps are read against each other level
+  # for level.
+  alphas: [0.0, 0.143, 0.286, 0.429, 0.571, 0.714, 0.857, 1.0]
+  latencies_ms: [250]
+  seeds: 10

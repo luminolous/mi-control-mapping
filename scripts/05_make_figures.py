@@ -43,7 +43,10 @@ logger = get_logger(__name__)
 FIGURE_SOURCES: dict[str, tuple[str, ...]] = {
     "fig1_quality_sweep": ("lambda_sweep", "main"),
     "fig2_kappa_against_success": ("main", "lambda_sweep"),
-    "fig3_alpha_sweep": ("alpha_sweep",),
+    # The blind sweep first: `agents/05` §6 asks this figure to show the
+    # crossing at alpha*, and only intent-blind has one. Intent-aware never
+    # stops reading the decoder, so its slope never reaches zero.
+    "fig3_alpha_sweep": ("alpha_sweep_blind", "alpha_sweep"),
     "fig4_command_accuracy": ("ablation_latency", "main"),
     "fig6_intent_ablation": ("ablation_intent_blind", "alpha_sweep"),
 }

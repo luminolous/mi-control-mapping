@@ -38,6 +38,10 @@ EXPECTED_EPISODES = {
     "main": 1080,
     "lambda_sweep": 2160,
     "alpha_sweep": 2160,
+    # A ninth experiment, not in the table: `alpha_sweep` ran intent-aware,
+    # whose autonomy reads the decoder to pick its target, so its kappa slope
+    # cannot reach zero and H3 has no answer from it. See docs/decisions.md D63.
+    "alpha_sweep_blind": 2160,
     "ablation_window": 540,
     "ablation_latency": 720,
     "ablation_protocol": 360,
@@ -81,9 +85,15 @@ def test_every_experiment_names_itself(experiment: tuple[str, DictConfig]) -> No
     assert {cell.experiment for cell in enumerate_cells(cfg)} == {name}
 
 
-def test_the_matrix_is_about_eight_thousand_episodes() -> None:
-    """The figure `agents/05` §1 gives, which sets what the runner has to survive."""
-    assert 7000 <= sum(EXPECTED_EPISODES.values()) <= 9000
+def test_the_matrix_is_about_ten_thousand_episodes() -> None:
+    """A scale guard, so an axis added by accident is noticed.
+
+    `agents/05` §1 says roughly 8,000, which the eight experiments in its table
+    come to. The ninth, `alpha_sweep_blind`, adds 2,160 deliberately: the eighth
+    could not answer the hypothesis it was written for. Widened to match, with
+    the reason, rather than relaxed to whatever the configs happen to sum to.
+    """
+    assert 9500 <= sum(EXPECTED_EPISODES.values()) <= 11000
 
 
 # --- replay variants ---
