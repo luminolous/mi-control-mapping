@@ -257,7 +257,12 @@ docs/RESULTS.md
 *.npz
 !tests/fixtures/*.npz
 
+# Handover bundles built for another tool to read. Regenerable, and the paper
+# outline and results they carry are already in the repository.
+*.zip
+
 # Hydra run directories
 .hydra/
 outputs/
 multirun/
+paper/
