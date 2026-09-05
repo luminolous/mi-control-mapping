@@ -487,7 +487,17 @@ def h3_block(frame: pd.DataFrame, cfg: DictConfig) -> dict[str, Any]:
     alpha_star: float | None = None
     for level in levels:
         subset = frame[frame[autonomy] == level]
-        entry: dict[str, Any] = {"alpha": round(float(level), 6), "n": len(subset)}
+        # The spread of the response at this level, reported beside the slope.
+        # A slope of zero on a response with no spread is a ceiling, not a
+        # measurement, and the two look identical in a coefficient table.
+        # D51 refuses a degenerate response for H1 and H2; the per-level fits
+        # here cannot refuse without losing the level, so they disclose instead.
+        entry: dict[str, Any] = {
+            "alpha": round(float(level), 6),
+            "n": len(subset),
+            "response_sd": round(spread(subset[RESPONSE]), 6),
+            "saturated": spread(subset[RESPONSE]) < float(cfg.min_response_spread),
+        }
         try:
             fit = fit_mixed(
                 subset, f"{RESPONSE} ~ {predictor}", group=str(cfg.h1.group), ci=ci
@@ -531,6 +541,9 @@ def h3_block(frame: pd.DataFrame, cfg: DictConfig) -> dict[str, Any]:
         "by_alpha": per_level,
         "guard": {"metric": guard, **guard_fit.as_json()},
         "note": (
+            "A level marked saturated has no spread left in the response, so its slope is "
+            "zero because there is nothing to predict rather than because the predictor "
+            "stopped mattering; read alpha_star against response_sd. "
             "alpha_star is the lowest level on the alpha grid whose kappa slope interval "
             "includes zero. It is an estimate from that grid, not a solved threshold: the "
             "true crossing lies somewhere between it and the level below, and a finer grid "
