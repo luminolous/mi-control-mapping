@@ -247,6 +247,38 @@ def test_no_source_file_is_gitignored() -> None:
     assert _ignored(candidates) == set()
 
 
+# Directories that do not exist yet but would be ordinary places to put source.
+# Every name here appears in the stock Python gitignore as a build or tool
+# artefact, so an unanchored pattern would swallow it the day it is created.
+COULD_BE_ADDED = (
+    "src/micm/lib/thing.py",
+    "src/micm/var/thing.py",
+    "src/micm/parts/thing.py",
+    "configs/target/thing.yaml",
+    "configs/instance/thing.yaml",
+    "configs/share/thing.yaml",
+    "tests/cover/test_thing.py",
+    "tests/fixtures/golden_subj01.npz",
+    "scripts/downloads/thing.py",
+    "notebooks/01_thing.ipynb",
+    "paper/main.tex",
+)
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git is not installed")
+@pytest.mark.skipif(not (REPO_ROOT / ".git").exists(), reason="not a git working tree")
+def test_a_source_directory_added_later_would_not_be_swallowed() -> None:
+    """`test_no_source_file_is_gitignored` only sees files that exist today.
+
+    That leaves the same failure available to anyone who adds a directory the
+    stock gitignore happens to name. Creating `src/micm/lib/` would have removed
+    it from version control with no error and no failing test, which is how
+    `src/micm/data/` was lost once already. These paths are hypothetical on
+    purpose: the point is to fail before the directory exists.
+    """
+    assert _ignored(list(COULD_BE_ADDED)) == set()
+
+
 @pytest.mark.skipif(shutil.which("git") is None, reason="git is not installed")
 @pytest.mark.skipif(not (REPO_ROOT / ".git").exists(), reason="not a git working tree")
 def test_large_and_local_paths_stay_ignored() -> None:

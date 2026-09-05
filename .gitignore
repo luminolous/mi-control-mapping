@@ -8,19 +8,19 @@ __pycache__/
 
 # Distribution / packaging
 .Python
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-share/python-wheels/
+/build/
+/develop-eggs/
+/dist/
+/downloads/
+/eggs/
+/.eggs/
+/lib/
+/lib64/
+/parts/
+/sdist/
+/var/
+/wheels/
+/share/python-wheels/
 *.egg-info/
 .installed.cfg
 *.egg
@@ -37,9 +37,9 @@ pip-log.txt
 pip-delete-this-directory.txt
 
 # Unit test / coverage reports
-htmlcov/
-.tox/
-.nox/
+/htmlcov/
+/.tox/
+/.nox/
 .coverage
 .coverage.*
 .cache
@@ -49,7 +49,7 @@ coverage.xml
 *.py.cover
 .hypothesis/
 .pytest_cache/
-cover/
+/cover/
 
 # Translations
 *.mo
@@ -62,24 +62,24 @@ db.sqlite3
 db.sqlite3-journal
 
 # Flask stuff:
-instance/
-.webassets-cache
+/instance/
+/.webassets-cache
 
 # Scrapy stuff:
-.scrapy
+/.scrapy
 
 # Sphinx documentation
 docs/_build/
 
 # PyBuilder
-.pybuilder/
-target/
+/.pybuilder/
+/target/
 
 # Jupyter Notebook
 .ipynb_checkpoints
 
 # IPython
-profile_default/
+/profile_default/
 ipython_config.py
 
 # pyenv
@@ -115,7 +115,7 @@ ipython_config.py
 # pdm.lock
 # pdm.toml
 .pdm-python
-.pdm-build/
+/.pdm-build/
 
 # pixi
 #   Similar to Pipfile.lock, it is generally recommended to include pixi.lock in version control.
@@ -125,7 +125,7 @@ ipython_config.py
 .pixi
 
 # PEP 582; used by e.g. github.com/David-OConnor/pyflow and github.com/pdm-project/pdm
-__pypackages__/
+/__pypackages__/
 
 # Celery stuff
 celerybeat-schedule
@@ -137,12 +137,12 @@ celerybeat.pid
 *.pid
 
 # RabbitMQ
-mnesia/
-rabbitmq/
-rabbitmq-data/
+/mnesia/
+/rabbitmq/
+/rabbitmq-data/
 
 # ActiveMQ
-activemq-data/
+/activemq-data/
 
 # SageMath parsed files
 *.sage.py
@@ -162,6 +162,12 @@ activemq-data/
 /env.bak/
 /venv.bak/
 
+# Anchored above, all of them. Unanchored, a pattern like `lib/` or `target/`
+# matches a directory of that name at ANY depth, so `src/micm/lib/` or
+# `configs/target/` would leave the repository without a word. D30 fixed
+# `data/`, `env/` and `venv/` after exactly that; these are the rest of the
+# same class, anchored before they can bite.
+
 # Spyder project settings
 .spyderproject
 .spyproject
@@ -178,13 +184,13 @@ activemq-data/
 dmypy.json
 
 # Pyre type checker
-.pyre/
+/.pyre/
 
 # pytype static type analyzer
-.pytype/
+/.pytype/
 
 # Cython debug symbols
-cython_debug/
+/cython_debug/
 
 # PyCharm
 #   JetBrains specific template is maintained in a separate JetBrains.gitignore that can
@@ -197,7 +203,7 @@ cython_debug/
 #   Abstra is an AI-powered process automation framework.
 #   Ignore directories containing user credentials, local state, and settings.
 #   Learn more at https://abstra.io/docs
-.abstra/
+/.abstra/
 
 # Visual Studio Code
 #   Visual Studio Code specific template is maintained in a separate VisualStudioCode.gitignore 
@@ -215,9 +221,9 @@ tempCodeRunnerFile.py
 .pypirc
 
 # Marimo
-marimo/_static/
-marimo/_lsp/
-__marimo__/
+/marimo/_static/
+/marimo/_lsp/
+/__marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
@@ -225,6 +231,15 @@ __marimo__/
 # Agents
 .agents
 CLAUDE.md
+
+# Claude Code project settings. Agent files, kept out by request alongside
+# .agents/ and CLAUDE.md.
+.claude/
+
+# OS metadata
+.DS_Store
+Thumbs.db
+desktop.ini
 
 # Project working documents kept out of version control by request
 docs/decisions.md
